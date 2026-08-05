@@ -55,15 +55,17 @@ RUN { grep -iv '^\.end[[:space:]]*$' /tmp/vdiv_base.cir; \
 COPY deno.json deno.lock ./
 COPY mod.ts server.ts ./
 COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY docker-entrypoint.sh ./
 
 # ── Cache Deno dependencies at build time ────────────────────────────────────
 # The committed deno.lock is authoritative; network access is needed here to
 # reach jsr.io.  Once cached in /deno-dir the container starts without network.
-RUN deno cache --lock=deno.lock server.ts mod.ts
+# stdio-shim.ts pulls @std/streams which is not imported by server.ts — cache
+# it explicitly so the container can run in stdio mode without network.
+RUN deno cache --lock=deno.lock server.ts mod.ts scripts/stdio-shim.ts
 
 EXPOSE 3023
 
-# --hostname=0.0.0.0 uses the legitimate --hostname CLI flag (server.ts:parseCli,
-# line 65) to override the default 127.0.0.1 loopback bind, making the server
-# reachable from outside the container on port 3023.
-CMD ["deno", "run", "--allow-all", "server.ts", "--port=3023", "--hostname=0.0.0.0"]
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["http"]

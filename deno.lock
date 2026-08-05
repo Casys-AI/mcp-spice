@@ -4,6 +4,7 @@
     "jsr:@casys/mcp-server@0.24.1": "0.24.1",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.14",
+    "jsr:@std/streams@1": "1.1.2",
     "jsr:@std/yaml@1": "1.2.0",
     "npm:@modelcontextprotocol/ext-apps@^1.7.4": "1.7.5_@modelcontextprotocol+sdk@1.30.0__zod@4.4.3_zod@4.4.3",
     "npm:@modelcontextprotocol/sdk@^1.29.0": "1.30.0_zod@4.4.3",
@@ -33,6 +34,9 @@
     },
     "@std/internal@1.0.14": {
       "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
+    },
+    "@std/streams@1.1.2": {
+      "integrity": "0249bf9b78a999f57032ca4d8e7ccaa57579090242640b35ddc948fbb745d3af"
     },
     "@std/yaml@1.2.0": {
       "integrity": "20beb41e4983ba3437dbefac62b14061ab058e8a187596f19d28ff9035f6e6cf"
@@ -574,7 +578,8 @@
     "dependencies": [
       "jsr:@casys/mcp-server@0.24.1",
       "jsr:@std/assert@1",
-      "jsr:@std/path@^1.1.0"
+      "jsr:@std/path@^1.1.0",
+      "jsr:@std/streams@1"
     ]
   }
 }
