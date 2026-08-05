@@ -1,0 +1,6 @@
+RC Low-Pass Filter R=1k C=1uF Vin=1V step
+Vin in 0 DC 0 PULSE(0 1 0 1n 1n 10m 20m)
+R1 in out 1000
+C1 out 0 1e-6
+.tran 10u 6m
+.end

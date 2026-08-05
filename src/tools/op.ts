@@ -1,45 +1,67 @@
 /**
  * spice_simulate_op — DC operating-point simulation.
  *
- * The caller supplies a complete SPICE netlist (as a file path) that includes
- * a `.op` directive and a `.control` block with `print` or `.meas` lines
- * specifying which scalar results to return. The tool runs ngspice in batch
- * mode and returns the named measurements extracted from the output.
+ * The caller supplies a SPICE netlist (circuit only, no .control block) and a
+ * list of node names whose voltages are requested.  The server writes the
+ * .control block, runs ngspice in batch mode, and returns the voltages.
  *
- * The tool does NOT interpret results or declare compliance. Measurements are
- * raw ngspice output. The oracle (SysON constraint evaluation) decides if the
- * values satisfy a requirement.
+ * Security: the netlist is validated for forbidden directives before the
+ * subprocess launches (see src/api/netlist-security.ts).  The SHA-256 of the
+ * private snapshot is always returned and may optionally be asserted by the
+ * caller upfront.
+ *
+ * The tool does NOT declare whether the voltages satisfy a specification;
+ * that verdict belongs to the oracle (SysON constraint evaluation).
  */
 
-import { snapshotNetlistArtifact } from "../api/netlist-artifact.ts";
-import { runNgspice } from "../api/ngspice.ts";
+import {
+  NetlistArtifactError,
+  snapshotNetlistArtifact,
+} from "../api/netlist-artifact.ts";
+import {
+  NetlistSecurityError,
+  validateNetlistSecurity,
+} from "../api/netlist-security.ts";
+import { runNgspiceOp } from "../api/ngspice.ts";
 import type { SpiceTool } from "./types.ts";
 
 const TOOL_NAME = "spice_simulate_op";
 
 const NOT_CHECKED = [
-  "Temperature effects: simulation runs at TNOM=27°C unless the netlist overrides .TEMP or .OPTIONS TNOM.",
-  "Convergence: ngspice uses default DC convergence tolerances (ABSTOL=1e-12, RELTOL=1e-3); divergent circuits raise SpiceError.",
-  "Parameter sweep: this tool runs a single .op point; use spice_simulate_dc for source sweeps.",
+  "Temperature: simulation runs at TNOM=27°C unless the netlist overrides .TEMP or .OPTIONS TNOM.",
+  "Convergence: ngspice uses default DC tolerances (ABSTOL=1e-12, RELTOL=1e-3); divergent circuits raise SpiceError.",
+  "Sweep: this tool returns a single .op point; use spice_simulate_dc for source sweeps.",
   "Monte Carlo / worst-case analysis is not performed.",
-  "Non-linear component models require the model definitions embedded in the netlist; no model library is provided by this server.",
+  "Non-linear component models require .model definitions embedded in the netlist; no model library is provided by this server.",
+  "Branch currents are not returned; only node voltages are extracted.",
 ];
 
 const INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: ["netlist_path"],
+  required: ["netlist_path", "netlist_sha256", "nodes"],
   properties: {
     netlist_path: {
       type: "string",
       description: "Absolute path to the SPICE netlist (.cir / .sp / .spi). " +
-        "The netlist must include a .op directive and a .control block with " +
-        "`run`, one or more `print <var>` lines, and `quit`.",
+        "The netlist must contain only circuit elements and a .op directive. " +
+        "Do NOT include a .control block — the server writes it. " +
+        "Forbidden: .control, .include, .lib, .shell, absolute paths.",
     },
-    expected_netlist_sha256: {
+    netlist_sha256: {
       type: "string",
-      description: "Optional 64-char hex SHA-256 of the netlist file. " +
-        "When supplied, the server raises an error if the computed digest differs.",
+      description: "64-char hex SHA-256 of the netlist file. " +
+        "The server computes the digest of its private snapshot and raises " +
+        "NetlistArtifactError if it differs from this value.",
+    },
+    nodes: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string" },
+      description:
+        'Node names whose DC voltages are requested (e.g. ["out", "vdd"]). ' +
+        "Use bare names as they appear in the netlist, without the v() wrapper. " +
+        'The ground node is "0".',
     },
     timeout_s: {
       type: "number",
@@ -51,30 +73,33 @@ const INPUT_SCHEMA: Record<string, unknown> = {
 const OUTPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: [
-    "measurements",
-    "not_checked",
-    "input_artifact",
-  ],
+  required: ["node_voltages", "measurements", "not_checked", "input_artifact"],
   properties: {
+    node_voltages: {
+      type: "object",
+      description:
+        "Node name → voltage in volts, for each node in the `nodes` input array.",
+      additionalProperties: { type: "number" },
+    },
     measurements: {
       type: "object",
-      description: "Named scalar results extracted from ngspice print/meas output. " +
-        "Keys are lower-cased ngspice variable names (e.g. `v(out)`, `i(vin)`, `vmax`). " +
-        "Values carry `value` (number) and optional `at` (time or frequency of the extremum).",
+      description:
+        "Alias of node_voltages; present for cross-tool schema uniformity. " +
+        "Contains the same key/value pairs wrapped in {value: number}.",
       additionalProperties: {
         type: "object",
         additionalProperties: false,
         required: ["value"],
         properties: {
           value: { type: "number" },
-          at: { type: "number" },
         },
       },
     },
     not_checked: {
       type: "array",
       items: { type: "string" },
+      description:
+        "Known limits of this simulation — the oracle must account for them.",
     },
     input_artifact: {
       type: "object",
@@ -93,14 +118,16 @@ export const opTool: SpiceTool = {
   name: TOOL_NAME,
   description:
     "Run an ngspice DC operating-point (.op) simulation on a caller-supplied " +
-    "SPICE netlist and return named scalar measurements (node voltages, branch " +
-    "currents, .meas results). The tool measures; it does not declare whether " +
-    "the circuit meets a specification — that verdict belongs to the oracle.",
+    "circuit netlist (no .control block) and return requested node voltages. " +
+    "The server writes the .control block and validates the netlist for " +
+    "forbidden directives before running. " +
+    "The tool measures; it does not declare whether the circuit meets a " +
+    "specification — that verdict belongs to the oracle.",
   category: "simulation",
   inputSchema: INPUT_SCHEMA,
   outputSchema: OUTPUT_SCHEMA,
   annotations: {
-    readOnlyHint: false, // writes to a temp dir during simulation
+    readOnlyHint: false, // writes to a server-controlled temp dir during simulation
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
@@ -111,32 +138,63 @@ export const opTool: SpiceTool = {
       throw new TypeError(`[${TOOL_NAME}] netlist_path must be a non-empty string.`);
     }
 
-    const expectedSha256 = typeof args["expected_netlist_sha256"] === "string"
-      ? args["expected_netlist_sha256"]
-      : undefined;
+    const netlistSha256 = args["netlist_sha256"];
+    if (typeof netlistSha256 !== "string" || !netlistSha256.trim()) {
+      throw new TypeError(
+        `[${TOOL_NAME}] netlist_sha256 must be a non-empty 64-char hex string.`,
+      );
+    }
+
+    const nodesRaw = args["nodes"];
+    if (!Array.isArray(nodesRaw) || nodesRaw.length === 0) {
+      throw new TypeError(
+        `[${TOOL_NAME}] nodes must be a non-empty array of node names.`,
+      );
+    }
+    const nodes = nodesRaw.map((n) => {
+      if (typeof n !== "string") {
+        throw new TypeError(`[${TOOL_NAME}] Each node name must be a string.`);
+      }
+      return n;
+    });
 
     const rawTimeout = args["timeout_s"];
     const timeoutMs = typeof rawTimeout === "number"
       ? Math.min(Math.max(rawTimeout, 1), 300) * 1000
       : 30_000;
 
+    // 1. Snapshot (copies file, checks digest).
     const snapshot = await snapshotNetlistArtifact(
       TOOL_NAME,
       netlistPath,
-      expectedSha256,
+      netlistSha256,
     );
 
     try {
-      const result = await runNgspice(snapshot.artifact.path, timeoutMs);
+      // 2. Read and validate security BEFORE subprocess launch.
+      const circuitContent = await Deno.readTextFile(snapshot.artifact.path);
+      validateNetlistSecurity(circuitContent, TOOL_NAME);
 
-      const summary = Object.entries(result.measurements)
-        .map(([k, v]) => `${k}=${v.value.toExponential(4)}`)
+      // 3. Run the simulation (server builds .control block).
+      const result = await runNgspiceOp(circuitContent, nodes, timeoutMs);
+
+      // 4. Build structured output.
+      const node_voltages = result.nodeVoltages;
+      // measurements mirror for schema uniformity (cross-tool callers)
+      const measurements: Record<string, { value: number }> = {};
+      for (const [k, v] of Object.entries(node_voltages)) {
+        measurements[k] = { value: v };
+      }
+
+      const summary = nodes
+        .map((n) => `${n}=${(node_voltages[n] ?? NaN).toExponential(4)} V`)
         .join(", ");
 
       return {
         content: `[${TOOL_NAME}] sha256:${snapshot.artifact.sha256}: ${summary}`,
         structuredContent: {
-          measurements: result.measurements,
+          node_voltages,
+          measurements,
           not_checked: NOT_CHECKED,
           input_artifact: {
             sha256: snapshot.artifact.sha256,
@@ -145,6 +203,15 @@ export const opTool: SpiceTool = {
           },
         },
       };
+    } catch (err) {
+      // Re-raise typed errors as-is; wrap unknown errors.
+      if (
+        err instanceof NetlistArtifactError ||
+        err instanceof NetlistSecurityError
+      ) {
+        throw err;
+      }
+      throw err;
     } finally {
       await snapshot.cleanup();
     }

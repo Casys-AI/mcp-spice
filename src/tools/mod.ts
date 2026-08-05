@@ -1,16 +1,16 @@
 /**
  * Tool registry for mcp-spice.
  *
- * Mirrors mcp-dfm/src/tools/mod.ts — a single export surface that the client
- * and tests use to enumerate all tools without importing individual categories.
+ * Single export surface for all tools; mirrors mcp-dfm/src/tools/mod.ts.
  */
 
 import { opTool } from "./op.ts";
+import { tranTool } from "./tran.ts";
 import type { SpiceTool, SpiceToolCategory } from "./types.ts";
 
 export { type SpiceTool, type SpiceToolCategory } from "./types.ts";
 
-export const allTools: SpiceTool[] = [opTool];
+export const allTools: SpiceTool[] = [opTool, tranTool];
 
 export function getToolByName(name: string): SpiceTool | undefined {
   return allTools.find((t) => t.name === name);

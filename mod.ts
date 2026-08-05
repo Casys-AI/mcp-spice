@@ -15,11 +15,22 @@ export type { SpiceTool, SpiceToolCategory } from "./src/tools/types.ts";
 export {
   NgspiceNotFoundError,
   parseMeasurements,
+  parseWrdata,
   SpiceError,
 } from "./src/api/ngspice.ts";
-export type { NgspiceResult, SpiceMeasurement } from "./src/api/ngspice.ts";
+export type {
+  NodeStats,
+  OpResult,
+  SpiceMeasurement,
+  TranResult,
+} from "./src/api/ngspice.ts";
 export {
   NetlistArtifactError,
   snapshotNetlistArtifact,
 } from "./src/api/netlist-artifact.ts";
 export type { NetlistArtifact, NetlistSnapshot } from "./src/api/netlist-artifact.ts";
+export {
+  NetlistSecurityError,
+  validateNetlistSecurity,
+  validateNodeName,
+} from "./src/api/netlist-security.ts";

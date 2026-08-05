@@ -33,9 +33,10 @@ export function createSpiceServer(
     backpressureStrategy: "queue",
     validateSchema: true,
     instructions: "SPICE circuit simulation via ngspice 44.2 batch mode. " +
-      "The caller supplies a complete netlist with a .control block " +
-      "declaring which scalar results to return (print / .meas). " +
-      "The server returns raw measurements only — no verdict on compliance.",
+      "The caller supplies the circuit definition only (no .control block). " +
+      "The server validates the netlist for forbidden directives, writes the " +
+      ".control block, runs ngspice, and returns raw scalar results. " +
+      "No verdict on compliance — the oracle decides.",
     logger: options.logger ?? ((message) => console.error(`[mcp-spice] ${message}`)),
   });
 

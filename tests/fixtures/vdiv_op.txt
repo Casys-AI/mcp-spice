@@ -1,0 +1,15 @@
+
+Note: No compatibility mode selected!
+
+
+Circuit: voltage divider r1=1k r2=2k vin=3v
+
+Doing analysis at TEMP = 27.000000 and TNOM = 27.000000
+
+Using SPARSE 1.3 as Direct Linear Solver
+
+No. of Data Rows : 1
+v(out) = 2.000000e+00
+v(in) = 3.000000e+00
+i(vin) = -1.00000e-03
+ngspice-44.2 done
