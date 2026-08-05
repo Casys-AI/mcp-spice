@@ -144,6 +144,36 @@ deno task release:check             # full gate: fmt + check + lint + test
 deno run --allow-all scripts/gen_fixtures.ts
 ```
 
+## Docker
+
+```bash
+# Build (linux/arm64 — adjust --platform for amd64)
+docker build --platform linux/arm64 -t mcp-spice:local .
+
+# Run (fleet port 3023)
+docker run -d --name mcp-spice -p 3023:3023 mcp-spice:local
+
+# tools/list smoke test — MCP stateless 2026-07-28
+curl -s -X POST http://127.0.0.1:3023/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'MCP-Protocol-Version: 2026-07-28' \
+  -H 'Mcp-Method: tools/list' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+
+docker stop mcp-spice && docker rm mcp-spice
+```
+
+The image is built on `debian:trixie-slim` with ngspice `44.2+ds-1` installed via
+apt. The Deno binary is copied from `denoland/deno:debian` (multi-arch). A
+build-time smoke test runs ngspice in batch mode on the repo's `tests/fixtures/vdiv.cir`
+and asserts `v(out) = 2.000000e+00 V` — the build fails if ngspice is absent or
+produces the wrong result.
+
+The server binds `0.0.0.0:3023` inside the container (flag `--hostname=0.0.0.0`);
+the default loopback bind of `127.0.0.1` is documented in `server.ts:53` and
+`DEFAULT_HOSTNAME`.
+
 ## Port
 
 3023 — documented in `docs/reference/workspace-map.md` of casys-digital-thread.
