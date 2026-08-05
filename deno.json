@@ -7,9 +7,9 @@
   },
   "tasks": {
     "serve": "deno run --allow-all server.ts --port=3023",
-    "check": "deno check mod.ts server.ts src/client.ts src/api/ngspice.ts src/api/netlist-artifact.ts src/api/netlist-security.ts src/tools/types.ts src/tools/mod.ts src/tools/op.ts src/tools/tran.ts",
+    "check": "deno check mod.ts server.ts src/client.ts src/api/ngspice.ts src/api/netlist-artifact.ts src/api/netlist-security.ts src/tools/types.ts src/tools/mod.ts src/tools/op.ts src/tools/tran.ts scripts/gen_fixtures.ts",
     "lint": "deno lint",
-    "fmt": "deno fmt --check deno.json mod.ts server.ts src tests",
+    "fmt": "deno fmt --check deno.json mod.ts server.ts src tests scripts",
     "release:check": "deno task fmt && deno task check && deno task lint && deno task test",
     "test": "deno test --allow-all tests/"
   },

@@ -1,6 +1,5 @@
 # Deno cache
 .deno/
-deno.lock
 
 # OS
 .DS_Store

@@ -169,35 +169,45 @@ console.log(`Parsed rows: ${rows.length}`);
 // τ = R*C = 1000 * 1e-6 = 1e-3 s
 const TAU = 1e-3;
 
-// Find the row closest to t=τ (column 1 = time)
+// Find the row closest to t=τ (wrdata column 0 = time)
 const tauRow = rows.reduce((best, row) =>
-  Math.abs(row[1] - TAU) < Math.abs(best[1] - TAU) ? row : best
+  Math.abs(row[0] - TAU) < Math.abs(best[0] - TAU) ? row : best
 );
 console.log(
-  `Row at t≈τ=1ms: t=${tauRow[1].toExponential(4)}, v(out)=${tauRow[2].toExponential(6)}`,
+  `Row at t≈τ=1ms: t=${tauRow[0].toExponential(4)}, v(out)=${
+    tauRow[1].toExponential(6)
+  }`,
 );
 console.log(
-  `Expected v(out) at τ: ${(1 - Math.exp(-1)).toFixed(6)} V (${((1 - Math.exp(-1)) * 100).toFixed(2)}%)`,
+  `Expected v(out) at τ: ${(1 - Math.exp(-1)).toFixed(6)} V (${
+    ((1 - Math.exp(-1)) * 100).toFixed(2)
+  }%)`,
 );
 
 // Find the row closest to t=5τ
 const tau5Row = rows.reduce((best, row) =>
-  Math.abs(row[1] - 5 * TAU) < Math.abs(best[1] - 5 * TAU) ? row : best
+  Math.abs(row[0] - 5 * TAU) < Math.abs(best[0] - 5 * TAU) ? row : best
 );
 console.log(
-  `Row at t≈5τ=5ms: t=${tau5Row[1].toExponential(4)}, v(out)=${tau5Row[2].toExponential(6)}`,
+  `Row at t≈5τ=5ms: t=${tau5Row[0].toExponential(4)}, v(out)=${
+    tau5Row[1].toExponential(6)
+  }`,
 );
 console.log(
-  `Expected v(out) at 5τ: ${(1 - Math.exp(-5)).toFixed(6)} V (${((1 - Math.exp(-5)) * 100).toFixed(2)}%)`,
+  `Expected v(out) at 5τ: ${(1 - Math.exp(-5)).toFixed(6)} V (${
+    ((1 - Math.exp(-5)) * 100).toFixed(2)
+  }%)`,
 );
 
-// Min/max/final for v(out) (column 2)
-const vout = rows.map((r) => r[2]);
+// Min/max/final for v(out) (wrdata column 1)
+const vout = rows.map((r) => r[1]);
 const minV = Math.min(...vout);
 const maxV = Math.max(...vout);
 const finalV = vout[vout.length - 1];
 console.log(
-  `v(out) min=${minV.toExponential(6)} max=${maxV.toExponential(6)} final=${finalV.toExponential(6)}`,
+  `v(out) min=${minV.toExponential(6)} max=${maxV.toExponential(6)} final=${
+    finalV.toExponential(6)
+  }`,
 );
 console.log(`n_points: ${rows.length}`);
 
