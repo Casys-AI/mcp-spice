@@ -14,14 +14,8 @@
  * that verdict belongs to the oracle (SysON constraint evaluation).
  */
 
-import {
-  NetlistArtifactError,
-  snapshotNetlistArtifact,
-} from "../api/netlist-artifact.ts";
-import {
-  NetlistSecurityError,
-  validateNetlistSecurity,
-} from "../api/netlist-security.ts";
+import { snapshotNetlistArtifact } from "../api/netlist-artifact.ts";
+import { validateNetlistSecurity } from "../api/netlist-security.ts";
 import { runNgspiceOp } from "../api/ngspice.ts";
 import type { SpiceTool } from "./types.ts";
 
@@ -203,15 +197,6 @@ export const opTool: SpiceTool = {
           },
         },
       };
-    } catch (err) {
-      // Re-raise typed errors as-is; wrap unknown errors.
-      if (
-        err instanceof NetlistArtifactError ||
-        err instanceof NetlistSecurityError
-      ) {
-        throw err;
-      }
-      throw err;
     } finally {
       await snapshot.cleanup();
     }

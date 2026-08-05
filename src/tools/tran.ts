@@ -13,14 +13,8 @@
  * The tool does NOT interpret results or declare specification compliance.
  */
 
-import {
-  NetlistArtifactError,
-  snapshotNetlistArtifact,
-} from "../api/netlist-artifact.ts";
-import {
-  NetlistSecurityError,
-  validateNetlistSecurity,
-} from "../api/netlist-security.ts";
+import { snapshotNetlistArtifact } from "../api/netlist-artifact.ts";
+import { validateNetlistSecurity } from "../api/netlist-security.ts";
 import { runNgspiceTran } from "../api/ngspice.ts";
 import type { SpiceTool } from "./types.ts";
 
@@ -271,14 +265,6 @@ export const tranTool: SpiceTool = {
           },
         },
       };
-    } catch (err) {
-      if (
-        err instanceof NetlistArtifactError ||
-        err instanceof NetlistSecurityError
-      ) {
-        throw err;
-      }
-      throw err;
     } finally {
       await snapshot.cleanup();
     }
