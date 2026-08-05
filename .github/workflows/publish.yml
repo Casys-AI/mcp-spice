@@ -31,5 +31,19 @@ jobs:
         with:
           deno-version: v2.x
 
+      # A push that does not bump the version must not turn the run red:
+      # JSR versions are immutable, so "already published" is a no-op here,
+      # not a failure.
+      - name: Check whether this version is already on JSR
+        id: version
+        run: |
+          NAME=$(deno eval 'console.log(JSON.parse(Deno.readTextFileSync("deno.json")).name)')
+          VER=$(deno eval 'console.log(JSON.parse(Deno.readTextFileSync("deno.json")).version)')
+          BODY=$(curl -s "https://jsr.io/${NAME}/meta.json" || echo '{}')
+          PUBLISHED=$(BODY="$BODY" VER="$VER" deno eval 'const m = JSON.parse(Deno.env.get("BODY") ?? "{}"); console.log((Deno.env.get("VER") ?? "") in (m.versions ?? {}))')
+          echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
+          echo "$NAME@$VER already on JSR: $PUBLISHED"
+
       - name: Publish to JSR
+        if: steps.version.outputs.published != 'true'
         run: deno publish
