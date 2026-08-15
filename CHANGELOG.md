@@ -6,6 +6,31 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `ngspice_netlist_submit`: content-addressed netlist admission.
+  - Input: exact UTF-8 `netlist` + declared `netlist_sha256`.
+  - Server recomputes the digest and refuses a mismatch before any write.
+  - Security filter (`.include` / `.control` / `.lib` / `.shell` / absolute
+    paths) runs at submit time; a rejected netlist is not stored.
+  - Immutable store: same hash + same bytes is idempotent; a colliding
+    payload is refused (`netlist_store_collision`).
+  - Output: `{ sha256, bytes, uri }` (`uri` = `spice-netlist:sha256:<hex>`).
+- `spice_simulate_op` / `spice_simulate_tran` accept the submitted reference
+  (`netlist_sha256`, optional `netlist_uri`) in place of `netlist_path`.
+  Path + sha256 remains valid (backward compatible). Path and uri together
+  are refused (`ambiguous_netlist_source`).
+
+### Spec deviations (mcp-ngspice HTML vs this repo)
+
+- Simulate tools keep repo names `spice_simulate_*`; only the new admit tool
+  uses the spec name `ngspice_netlist_submit`.
+- Submit takes bytes + declared hash (critique / `/exports` read-only) rather
+  than a hash-only lookup of a pre-staged file.
+- Submit returns a content-addressed reference, not `{ requestId, status }`.
+- Field names follow repo snake_case (`netlist_sha256`, `bytes`) rather than
+  spec camelCase (`netlistSha256`, `byteCount`).
+
 ## [0.2.0] — 2026-08-05
 
 - `scripts/stdio-shim.ts`: stdio → stateless-HTTP adapter. Classic-SDK stdio clients

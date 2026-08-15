@@ -13,7 +13,7 @@
  * The tool does NOT interpret results or declare specification compliance.
  */
 
-import { snapshotNetlistArtifact } from "../api/netlist-artifact.ts";
+import { resolveSimulationNetlist } from "../api/netlist-resolve.ts";
 import { validateNetlistSecurity } from "../api/netlist-security.ts";
 import { runNgspiceTran } from "../api/ngspice.ts";
 import type { SpiceTool } from "./types.ts";
@@ -33,19 +33,27 @@ const NOT_CHECKED = [
 const INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: ["netlist_path", "netlist_sha256", "tstep_s", "tstop_s", "nodes"],
+  required: ["netlist_sha256", "tstep_s", "tstop_s", "nodes"],
   properties: {
     netlist_path: {
       type: "string",
       description: "Absolute path to the SPICE netlist (.cir / .sp / .spi). " +
+        "Optional when the netlist was admitted by ngspice_netlist_submit: " +
+        "omit the path and pass the returned sha256 (and optionally uri). " +
         "The netlist must contain only circuit elements and a .tran directive. " +
         "Do NOT include a .control block — the server writes it. " +
         "Forbidden: .control, .include, .lib, .shell, absolute paths.",
     },
+    netlist_uri: {
+      type: "string",
+      description: "Content-addressed URI from ngspice_netlist_submit " +
+        "(`spice-netlist:sha256:<hex>`). Exclusive with netlist_path.",
+    },
     netlist_sha256: {
       type: "string",
-      description: "64-char hex SHA-256 of the netlist file. " +
-        "Raises NetlistArtifactError if the snapshot digest differs.",
+      description: "64-char hex SHA-256 of the netlist bytes. " +
+        "With netlist_path, the server snapshots the file and checks the digest. " +
+        "Without netlist_path, the server loads the stored object at this hash.",
     },
     tstep_s: {
       type: "number",
@@ -164,18 +172,6 @@ export const tranTool: SpiceTool = {
     openWorldHint: false,
   },
   handler: async (args: Record<string, unknown>) => {
-    const netlistPath = args["netlist_path"];
-    if (typeof netlistPath !== "string" || !netlistPath.trim()) {
-      throw new TypeError(`[${TOOL_NAME}] netlist_path must be a non-empty string.`);
-    }
-
-    const netlistSha256 = args["netlist_sha256"];
-    if (typeof netlistSha256 !== "string" || !netlistSha256.trim()) {
-      throw new TypeError(
-        `[${TOOL_NAME}] netlist_sha256 must be a non-empty 64-char hex string.`,
-      );
-    }
-
     const tstep_s = args["tstep_s"];
     if (typeof tstep_s !== "number" || !isFinite(tstep_s) || tstep_s <= 0) {
       throw new TypeError(`[${TOOL_NAME}] tstep_s must be a positive finite number.`);
@@ -210,12 +206,8 @@ export const tranTool: SpiceTool = {
       ? Math.min(Math.max(rawTimeout, 1), 300) * 1000
       : 30_000;
 
-    // 1. Snapshot.
-    const snapshot = await snapshotNetlistArtifact(
-      TOOL_NAME,
-      netlistPath,
-      netlistSha256,
-    );
+    // 1. Snapshot from path (legacy) or content-addressed store (submit).
+    const snapshot = await resolveSimulationNetlist(TOOL_NAME, args);
 
     try {
       // 2. Read and validate security.

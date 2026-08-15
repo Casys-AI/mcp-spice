@@ -5,7 +5,7 @@
  * mcp-calculix/src/tools/types.ts.
  */
 
-export type SpiceToolCategory = "simulation";
+export type SpiceToolCategory = "simulation" | "artifact";
 
 export type SpiceToolHandler = (
   args: Record<string, unknown>,

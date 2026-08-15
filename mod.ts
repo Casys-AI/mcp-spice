@@ -26,6 +26,7 @@ export type {
 } from "./src/api/ngspice.ts";
 export {
   NetlistArtifactError,
+  sha256Hex,
   snapshotNetlistArtifact,
 } from "./src/api/netlist-artifact.ts";
 export type { NetlistArtifact, NetlistSnapshot } from "./src/api/netlist-artifact.ts";
@@ -34,3 +35,20 @@ export {
   validateNetlistSecurity,
   validateNodeName,
 } from "./src/api/netlist-security.ts";
+export { resolveSimulationNetlist } from "./src/api/netlist-resolve.ts";
+export {
+  configureNetlistStoreDir,
+  getNetlistPath,
+  NETLIST_MAX_BYTES,
+  netlistUri,
+  parseNetlistUri,
+  putNetlistBytes,
+  resolveNetlistStoreDir,
+} from "./src/api/netlist-store.ts";
+export type { NetlistRef } from "./src/api/netlist-store.ts";
+export {
+  isMachineReadableError,
+  mapSpiceToolError,
+  SpiceToolError,
+} from "./src/api/tool-error.ts";
+export type { MachineReadableErrorFields } from "./src/api/tool-error.ts";

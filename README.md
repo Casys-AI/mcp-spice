@@ -11,8 +11,9 @@ named scalar measurements. No verdict is issued; the oracle
 
 | Tool | Analysis | Input | Output |
 |---|---|---|---|
-| `spice_simulate_op` | DC `.op` | circuit netlist + `nodes[]` | `node_voltages`, `measurements` |
-| `spice_simulate_tran` | Transient `.tran` | circuit netlist + `nodes[]` + `tstep_s` + `tstop_s` | `node_stats` (min/max/final per node), `simulation` |
+| `ngspice_netlist_submit` | Admit netlist | UTF-8 `netlist` + declared `netlist_sha256` | `{ sha256, bytes, uri }` |
+| `spice_simulate_op` | DC `.op` | path **or** submitted `netlist_sha256` + `nodes[]` | `node_voltages`, `measurements` |
+| `spice_simulate_tran` | Transient `.tran` | path **or** submitted `netlist_sha256` + `nodes[]` + `tstep_s` + `tstop_s` | `node_stats` (min/max/final per node), `simulation` |
 
 ## Prerequisites
 
@@ -49,12 +50,36 @@ R2 out 0 2000
 .end
 ```
 
-Call `spice_simulate_op` with:
+Admit the netlist (required when `/exports` is read-only — the bytes travel
+over MCP, never via `docker exec`):
+
+```json
+{
+  "netlist":        "<exact UTF-8 netlist text>",
+  "netlist_sha256": "<64-char hex SHA-256 of those UTF-8 bytes>"
+}
+```
+
+`ngspice_netlist_submit` returns `{ "sha256", "bytes", "uri" }`. The same
+`sha256` (optionally with `uri`) is accepted by the simulate tools in place
+of `netlist_path`. A filesystem path remains valid (backward compatible).
+
+Call `spice_simulate_op` with a path:
 
 ```json
 {
   "netlist_path":   "/path/to/circuit.cir",
   "netlist_sha256": "<64-char hex SHA-256 of the file>",
+  "nodes":          ["out", "in"]
+}
+```
+
+or with the submitted reference:
+
+```json
+{
+  "netlist_sha256": "<sha256 from ngspice_netlist_submit>",
+  "netlist_uri":    "spice-netlist:sha256:<sha256>",
   "nodes":          ["out", "in"]
 }
 ```
@@ -125,10 +150,16 @@ These limits are always declared in the `not_checked` field of each response:
 
 ## SHA-256 attestation
 
-Every call requires `netlist_sha256`: a 64-char hex SHA-256 of the netlist file.
-The server computes the digest of its private snapshot and raises
-`NetlistArtifactError` if it differs. The same digest is returned in
-`input_artifact.sha256`, proving the exact bytes the simulator consumed.
+Every call requires `netlist_sha256`: a 64-char hex SHA-256 of the netlist
+UTF-8 bytes. The server recomputes the digest and refuses a mismatch
+(fail-closed) before any store write or simulation. The same digest is
+returned in `input_artifact.sha256` (simulate) and in the submit reference,
+proving the exact bytes stored or consumed.
+
+Submitted netlists live in the provider volume
+`${NGSPICE_RUNS_DIR:-/ngspice-runs}/inputs/<sha256>` (override with
+`SPICE_NETLIST_STORE`). Same hash and same bytes is idempotent; a different
+payload at an existing hash is refused.
 
 ## Development
 
@@ -136,8 +167,8 @@ The server computes the digest of its private snapshot and raises
 deno task check        # type-check
 deno task lint         # lint
 deno task fmt          # format check (deno fmt --check)
-deno task test         # unit tests (no ngspice required — 22 tests)
-SPICE_RUN_NATIVE=1 deno task test   # include ngspice integration tests (6 additional)
+deno task test         # unit tests (no ngspice required — 34 tests)
+SPICE_RUN_NATIVE=1 deno task test   # include ngspice integration tests (7 additional)
 deno task release:check             # full gate: fmt + check + lint + test
 
 # Regenerate fixtures (requires ngspice in PATH, run inside the dev container):

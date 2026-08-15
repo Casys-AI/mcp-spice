@@ -23,10 +23,16 @@
  * case-insensitive for directives.
  */
 
+import type { MachineReadableErrorFields } from "./tool-error.ts";
+
 /** Raised when the netlist contains a forbidden directive or construct. */
-export class NetlistSecurityError extends Error {
+export class NetlistSecurityError extends Error implements MachineReadableErrorFields {
   /** The offending directive or construct, as extracted from the netlist. */
   readonly directive: string;
+  readonly code = "netlist_forbidden_directive";
+  readonly context: Record<string, unknown>;
+  readonly recovery =
+    "Remove the forbidden construct from the netlist. Supply only circuit elements, model definitions, and a simulation type directive. The server owns the .control block.";
 
   constructor(directive: string, toolName: string) {
     super(
@@ -37,6 +43,7 @@ export class NetlistSecurityError extends Error {
     );
     this.name = "NetlistSecurityError";
     this.directive = directive;
+    this.context = { toolName, directive };
   }
 }
 
