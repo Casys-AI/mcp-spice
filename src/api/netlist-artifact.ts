@@ -7,11 +7,25 @@
  * mcp-calculix/src/api/input-artifact.ts — see those repos for rationale.
  */
 
+import type { MachineReadableErrorFields } from "./tool-error.ts";
+
 /** Raised when the netlist path is missing, empty, or the digest mismatches. */
-export class NetlistArtifactError extends Error {
-  constructor(message: string) {
+export class NetlistArtifactError extends Error implements MachineReadableErrorFields {
+  readonly code: string;
+  readonly context: Record<string, unknown>;
+  readonly recovery: string;
+
+  constructor(
+    message: string,
+    code = "netlist_artifact_error",
+    context: Record<string, unknown> = {},
+    recovery = "Check the netlist path and the declared SHA-256, then retry.",
+  ) {
     super(message);
     this.name = "NetlistArtifactError";
+    this.code = code;
+    this.context = context;
+    this.recovery = recovery;
   }
 }
 
@@ -31,7 +45,7 @@ export interface NetlistSnapshot {
   cleanup(): Promise<void>;
 }
 
-function sha256Hex(bytes: Uint8Array): Promise<string> {
+export function sha256Hex(bytes: Uint8Array): Promise<string> {
   const contiguous = Uint8Array.from(bytes);
   return crypto.subtle
     .digest("SHA-256", contiguous.buffer as ArrayBuffer)
@@ -61,6 +75,9 @@ export async function snapshotNetlistArtifact(
   ) {
     throw new NetlistArtifactError(
       `[${toolName}] expected_netlist_sha256 must be a 64-character hexadecimal SHA-256 digest.`,
+      "invalid_netlist_sha256",
+      { toolName, expectedSha256 },
+      "Pass a 64-character hexadecimal SHA-256 of the UTF-8 netlist bytes.",
     );
   }
 
@@ -74,6 +91,9 @@ export async function snapshotNetlistArtifact(
     if (bytes.length === 0) {
       throw new NetlistArtifactError(
         `[${toolName}] Netlist input is empty: ${sourcePath}`,
+        "netlist_empty",
+        { toolName, sourcePath, byteCount: 0 },
+        "Provide a non-empty netlist file.",
       );
     }
     const sha256 = await sha256Hex(bytes);
@@ -84,6 +104,13 @@ export async function snapshotNetlistArtifact(
       throw new NetlistArtifactError(
         `[${toolName}] Netlist SHA-256 mismatch: expected ${expectedSha256.toLowerCase()}, ` +
           `computed ${sha256} from the private input snapshot.`,
+        "netlist_sha256_mismatch",
+        {
+          toolName,
+          expected: expectedSha256.toLowerCase(),
+          computed: sha256,
+        },
+        "Recompute the SHA-256 of the exact UTF-8 bytes and resubmit. The server does not trust a declared digest.",
       );
     }
     await Deno.chmod(snapshotPath, 0o400);
@@ -102,6 +129,9 @@ export async function snapshotNetlistArtifact(
     if (error instanceof Deno.errors.NotFound) {
       throw new NetlistArtifactError(
         `[${toolName}] Netlist file not found: ${sourcePath}`,
+        "netlist_not_found",
+        { toolName, sourcePath },
+        "Pass an existing absolute path, or submit the netlist with ngspice_netlist_submit and retry by sha256.",
       );
     }
     throw error;

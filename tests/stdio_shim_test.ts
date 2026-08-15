@@ -85,6 +85,7 @@ Deno.test(
       assertEquals(responses[1].id, 2);
       const names = (listed.tools as { name: string }[]).map((t) => t.name).sort();
       assertEquals(names, [
+        "ngspice_netlist_submit",
         "spice_simulate_op",
         "spice_simulate_tran",
       ]);

@@ -9,6 +9,7 @@
  */
 
 import { McpApp } from "@casys/mcp-server";
+import { mapSpiceToolError } from "./src/api/tool-error.ts";
 import { SpiceToolsClient } from "./src/client.ts";
 
 const VERSION = "0.1.0";
@@ -33,10 +34,15 @@ export function createSpiceServer(
     backpressureStrategy: "queue",
     validateSchema: true,
     instructions: "SPICE circuit simulation via ngspice 44.2 batch mode. " +
+      "Admit a netlist with ngspice_netlist_submit (UTF-8 bytes + declared " +
+      "SHA-256) to obtain a content-addressed reference. " +
+      "spice_simulate_op and spice_simulate_tran accept that reference via " +
+      "netlist_sha256 (optional netlist_uri) or a filesystem path as before. " +
       "The caller supplies the circuit definition only (no .control block). " +
       "The server validates the netlist for forbidden directives, writes the " +
       ".control block, runs ngspice, and returns raw scalar results. " +
       "No verdict on compliance — the oracle decides.",
+    toolErrorMapper: mapSpiceToolError,
     logger: options.logger ?? ((message) => console.error(`[mcp-spice] ${message}`)),
   });
 

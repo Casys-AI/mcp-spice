@@ -99,7 +99,7 @@ Deno.test(
 );
 
 Deno.test(
-  "mcp-spice tools/list returns spice_simulate_op and spice_simulate_tran",
+  "mcp-spice tools/list returns submit, spice_simulate_op and spice_simulate_tran",
   async () => {
     const { app } = createSpiceServer({ logger: () => {} });
     const port = freePort();
@@ -113,6 +113,7 @@ Deno.test(
       const listed = await rpc(url, "tools/list");
       const result = listed.body.result as Record<string, unknown>;
       const tools = result.tools as Array<Record<string, unknown>>;
+      assert(tools.some((t) => t.name === "ngspice_netlist_submit"));
       assert(tools.some((t) => t.name === "spice_simulate_op"));
       assert(tools.some((t) => t.name === "spice_simulate_tran"));
     } finally {
@@ -126,9 +127,9 @@ Deno.test(
 // ---------------------------------------------------------------------------
 
 Deno.test(
-  "All spice tools declare closed outputSchemas with required not_checked, measurements, input_artifact",
+  "Simulation tools declare closed outputSchemas with required not_checked, measurements, input_artifact",
   () => {
-    for (const tool of allTools) {
+    for (const tool of allTools.filter((t) => t.category === "simulation")) {
       const schema = tool.outputSchema as Record<string, unknown>;
       assertEquals(
         schema.additionalProperties,
@@ -153,6 +154,21 @@ Deno.test(
 );
 
 Deno.test(
+  "ngspice_netlist_submit declares a closed content-addressed reference schema",
+  () => {
+    const tool = allTools.find((t) => t.name === "ngspice_netlist_submit");
+    assert(tool, "ngspice_netlist_submit must be registered");
+    const schema = tool.outputSchema as Record<string, unknown>;
+    assertEquals(schema.additionalProperties, false);
+    const required = schema.required as string[];
+    assertEquals(required, ["sha256", "bytes", "uri"]);
+    const inputRequired = (tool.inputSchema as Record<string, unknown>)
+      .required as string[];
+    assertEquals(inputRequired, ["netlist", "netlist_sha256"]);
+  },
+);
+
+Deno.test(
   "All spice tools have destructiveHint and openWorldHint false in annotations",
   () => {
     for (const tool of allTools) {
@@ -171,7 +187,7 @@ Deno.test(
 );
 
 Deno.test(
-  "spice_simulate_op and spice_simulate_tran both require netlist_sha256 in their input schema",
+  "Every spice tool that consumes a netlist requires netlist_sha256; path is optional on simulate",
   () => {
     for (const tool of allTools) {
       const schema = tool.inputSchema as Record<string, unknown>;
@@ -179,6 +195,14 @@ Deno.test(
       assert(
         required.includes("netlist_sha256"),
         `${tool.name}: inputSchema.required must include "netlist_sha256"`,
+      );
+    }
+    for (const tool of allTools.filter((t) => t.category === "simulation")) {
+      const required = (tool.inputSchema as Record<string, unknown>)
+        .required as string[];
+      assert(
+        !required.includes("netlist_path"),
+        `${tool.name}: netlist_path must be optional so a submitted hash can replace it`,
       );
     }
   },
