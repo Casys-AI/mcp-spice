@@ -24,6 +24,9 @@ import { allTools } from "../src/tools/mod.ts";
 import { createSpiceServer } from "../server.ts";
 
 const RUN_NATIVE = Deno.env.get("SPICE_RUN_NATIVE") === "1";
+const PACKAGE_VERSION = (JSON.parse(
+  Deno.readTextFileSync(new URL("../deno.json", import.meta.url)),
+) as { version: string }).version;
 
 // ---------------------------------------------------------------------------
 // Port helper
@@ -45,13 +48,17 @@ async function rpc(
   method: string,
   params: Record<string, unknown> = {},
 ): Promise<{ response: Response; body: Record<string, unknown> }> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "mcp-protocol-version": PROTOCOL_VERSION,
+    "mcp-method": method,
+  };
+  if (method === "tools/call" && typeof params.name === "string") {
+    headers["mcp-name"] = params.name;
+  }
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "mcp-protocol-version": PROTOCOL_VERSION,
-      "mcp-method": method,
-    },
+    headers,
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
@@ -91,7 +98,7 @@ Deno.test(
       const result = discovered.body.result as Record<string, unknown>;
       const serverInfo = result.serverInfo as Record<string, unknown>;
       assertEquals(serverInfo.name, "mcp-spice");
-      assertEquals(serverInfo.version, "0.1.0");
+      assertEquals(serverInfo.version, PACKAGE_VERSION);
     } finally {
       await http.shutdown();
     }
@@ -208,6 +215,147 @@ Deno.test(
   },
 );
 
+Deno.test(
+  "spice_simulate_op schema accepts nodes-only, branch-only, or both, and requires one",
+  () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_op");
+    assert(tool, "spice_simulate_op must be registered");
+    const input = tool.inputSchema as Record<string, unknown>;
+    const required = input.required as string[];
+    assert(
+      required.includes("netlist_sha256"),
+      "netlist_sha256 remains required",
+    );
+    assertEquals(
+      required.includes("nodes"),
+      false,
+      "nodes must be omittable when branch_sources is supplied",
+    );
+    assertEquals(
+      required.includes("branch_sources"),
+      false,
+      "branch_sources must be omittable when nodes is supplied",
+    );
+    const properties = input.properties as Record<string, Record<string, unknown>>;
+    assertEquals(properties.nodes?.minItems, 1);
+    assertEquals(properties.branch_sources?.minItems, 1);
+    const anyOf = input.anyOf as Array<{ required: string[] }>;
+    assert(
+      Array.isArray(anyOf) && anyOf.length >= 2,
+      "anyOf must require one observable",
+    );
+    const requiredSets = anyOf.map((alt) => [...alt.required].sort().join(","));
+    assert(
+      requiredSets.includes("nodes"),
+      "schema must accept a nodes-only call",
+    );
+    assert(
+      requiredSets.includes("branch_sources"),
+      "schema must accept a branch-only call",
+    );
+
+    const output = tool.outputSchema as Record<string, unknown>;
+    assertEquals(output.additionalProperties, false);
+    const outRequired = output.required as string[];
+    assert(
+      outRequired.includes("node_voltages"),
+      "node_voltages remains in the closed output schema",
+    );
+    assert(
+      outRequired.includes("measurements"),
+      "measurements remains in the closed output schema",
+    );
+    assert(
+      outRequired.includes("branch_currents_a"),
+      "branch_currents_a must be advertised on the closed output schema",
+    );
+    const outProps = output.properties as Record<string, Record<string, unknown>>;
+    assertEquals(outProps.branch_currents_a?.type, "object");
+    assert(
+      String(outProps.branch_currents_a?.description ?? "").includes("positive into"),
+      "output schema must document the ngspice i(Vsource) sign convention",
+    );
+  },
+);
+
+Deno.test(
+  "spice_simulate_op handler rejects a call with neither nodes nor branch_sources",
+  async () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_op");
+    assert(tool);
+    await assertRejects(
+      async () => {
+        await tool.handler({ netlist_sha256: "a".repeat(64) });
+      },
+      TypeError,
+      "nodes or branch_sources",
+    );
+  },
+);
+
+Deno.test(
+  "spice_simulate_op handler rejects empty nodes and empty branch_sources together",
+  async () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_op");
+    assert(tool);
+    await assertRejects(
+      async () => {
+        await tool.handler({
+          netlist_sha256: "a".repeat(64),
+          nodes: [],
+          branch_sources: [],
+        });
+      },
+      TypeError,
+      "nodes or branch_sources",
+    );
+  },
+);
+
+Deno.test(
+  "spice_simulate_op handler rejects an injection-unsafe branch source name",
+  async () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_op");
+    assert(tool);
+    await assertRejects(
+      async () => {
+        await tool.handler({
+          netlist_sha256: "a".repeat(64),
+          branch_sources: ["Vin); quit"],
+        });
+      },
+      TypeError,
+      "Invalid source name",
+    );
+  },
+);
+
+Deno.test(
+  "tools/call spice_simulate_op schema-rejects a call with neither observable",
+  async () => {
+    const { app } = createSpiceServer({ logger: () => {} });
+    const port = freePort();
+    const http = await app.startHttp({
+      port,
+      hostname: "127.0.0.1",
+      onListen: () => {},
+    });
+    const url = `http://127.0.0.1:${port}/mcp`;
+    try {
+      const called = await rpc(url, "tools/call", {
+        name: "spice_simulate_op",
+        arguments: { netlist_sha256: "a".repeat(64) },
+      });
+      assert(
+        called.body.error !== undefined,
+        "neither-observable call must fail schema validation",
+      );
+    } finally {
+      await http.shutdown();
+    }
+  },
+);
+
 // ---------------------------------------------------------------------------
 // parseMeasurements — unit tests, no subprocess
 // ---------------------------------------------------------------------------
@@ -280,6 +428,25 @@ ngspice-44.2 done
 `;
     const m = parseMeasurements(log);
     assertEquals(Object.keys(m).length, 0);
+  },
+);
+
+Deno.test(
+  "parseMeasurements extracts hyphenated voltage and current selectors",
+  () => {
+    const log = `
+v(out-1) = 1.250000e+00
+i(v-in) = -2.50000e-03
+`;
+    const m = parseMeasurements(log);
+    assert(
+      Math.abs((m["v(out-1)"]?.value ?? -1) - 1.25) < 1e-12,
+      `Expected v(out-1)=1.25, got ${m["v(out-1)"]?.value}`,
+    );
+    assert(
+      Math.abs((m["i(v-in)"]?.value ?? 0) - (-2.5e-3)) < 1e-12,
+      `Expected i(v-in)=-2.5e-3, got ${m["i(v-in)"]?.value}`,
+    );
   },
 );
 
@@ -553,7 +720,8 @@ async function sha256File(path: string): Promise<string> {
 }
 
 Deno.test({
-  name: "spice_simulate_op returns V(out)=2.0 for R1=1k R2=2k Vin=3V voltage divider",
+  name:
+    "spice_simulate_op selects OP without a caller .op directive and returns V(out)=2.0",
   ignore: !RUN_NATIVE,
   fn: async () => {
     const tool = allTools.find((t) => t.name === "spice_simulate_op");
@@ -561,14 +729,13 @@ Deno.test({
 
     const tmpDir = await Deno.makeTempDir({ prefix: "spice-test-" });
     const netlistPath = `${tmpDir}/vdiv.cir`;
-    // Circuit-only netlist — no .control block
+    // No .op or .control: the called tool owns the analysis command.
     await Deno.writeTextFile(
       netlistPath,
       `Voltage Divider R1=1k R2=2k Vin=3V
 Vin in 0 DC 3
 R1 in out 1000
 R2 out 0 2000
-.op
 .end
 `,
     );
@@ -600,7 +767,161 @@ R2 out 0 2000
         "input_artifact.sha256 must be a 64-char hex string",
       );
       assertEquals(artifact.sha256, sha256);
+
+      const measurements = sc.measurements as Record<string, { value: number }>;
+      assertEquals(Object.keys(measurements).sort(), ["in", "out"]);
+      assertEquals(sc.branch_currents_a, {});
     } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+});
+
+const VDIV_CIRCUIT = `Voltage Divider R1=1k R2=2k Vin=3V
+Vin in 0 DC 3
+R1 in out 1000
+R2 out 0 2000
+.end
+`;
+
+Deno.test({
+  name:
+    "spice_simulate_op branch-only returns i(Vin)≈-1e-3 A without mixing currents into measurements",
+  ignore: !RUN_NATIVE,
+  fn: async () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_op");
+    assert(tool, "spice_simulate_op must be registered");
+
+    const tmpDir = await Deno.makeTempDir({ prefix: "spice-test-" });
+    const netlistPath = `${tmpDir}/vdiv.cir`;
+    await Deno.writeTextFile(netlistPath, VDIV_CIRCUIT);
+    const sha256 = await sha256File(netlistPath);
+
+    try {
+      const result = await tool.handler({
+        netlist_path: netlistPath,
+        netlist_sha256: sha256,
+        branch_sources: ["Vin"],
+      }) as { structuredContent: Record<string, unknown> };
+      const sc = result.structuredContent;
+      assertEquals(sc.node_voltages, {});
+      assertEquals(sc.measurements, {});
+      const currents = sc.branch_currents_a as Record<string, number>;
+      assert(
+        Math.abs((currents["Vin"] ?? 0) - (-1e-3)) < 1e-9,
+        `Expected i(Vin) ≈ -1e-3 A, got ${currents["Vin"]}`,
+      );
+      assertEquals(Object.keys(currents), ["Vin"]);
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "spice_simulate_op with nodes and branch_sources keeps voltages in measurements and currents separate",
+  ignore: !RUN_NATIVE,
+  fn: async () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_op");
+    assert(tool, "spice_simulate_op must be registered");
+
+    const tmpDir = await Deno.makeTempDir({ prefix: "spice-test-" });
+    const netlistPath = `${tmpDir}/vdiv.cir`;
+    await Deno.writeTextFile(netlistPath, VDIV_CIRCUIT);
+    const sha256 = await sha256File(netlistPath);
+
+    try {
+      const result = await tool.handler({
+        netlist_path: netlistPath,
+        netlist_sha256: sha256,
+        nodes: ["out", "in"],
+        branch_sources: ["Vin"],
+      }) as { structuredContent: Record<string, unknown> };
+      const sc = result.structuredContent;
+      const nodeVoltages = sc.node_voltages as Record<string, number>;
+      assert(Math.abs((nodeVoltages["out"] ?? -1) - 2.0) < 1e-9);
+      assert(Math.abs((nodeVoltages["in"] ?? -1) - 3.0) < 1e-9);
+      const measurements = sc.measurements as Record<string, { value: number }>;
+      assertEquals(Object.keys(measurements).sort(), ["in", "out"]);
+      assertEquals(
+        Object.keys(measurements).includes("Vin"),
+        false,
+        "amperes must not be mixed into measurements",
+      );
+      const currents = sc.branch_currents_a as Record<string, number>;
+      assert(Math.abs((currents["Vin"] ?? 0) - (-1e-3)) < 1e-9);
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: "spice_simulate_op raises SpiceError when requested branch source is absent",
+  ignore: !RUN_NATIVE,
+  fn: async () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_op");
+    assert(tool);
+
+    const tmpDir = await Deno.makeTempDir({ prefix: "spice-test-" });
+    const netlistPath = `${tmpDir}/vdiv.cir`;
+    await Deno.writeTextFile(netlistPath, VDIV_CIRCUIT);
+    const sha256 = await sha256File(netlistPath);
+
+    try {
+      await assertRejects(
+        async () => {
+          await tool.handler({
+            netlist_path: netlistPath,
+            netlist_sha256: sha256,
+            branch_sources: ["Vmissing"],
+          });
+        },
+        SpiceError,
+      );
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "tools/call spice_simulate_op accepts branch_sources and returns branch_currents_a",
+  ignore: !RUN_NATIVE,
+  fn: async () => {
+    const { app } = createSpiceServer({ logger: () => {} });
+    const port = freePort();
+    const http = await app.startHttp({
+      port,
+      hostname: "127.0.0.1",
+      onListen: () => {},
+    });
+    const url = `http://127.0.0.1:${port}/mcp`;
+    const tmpDir = await Deno.makeTempDir({ prefix: "spice-wire-" });
+    try {
+      const netlistPath = `${tmpDir}/vdiv.cir`;
+      await Deno.writeTextFile(netlistPath, VDIV_CIRCUIT);
+      const sha256 = await sha256File(netlistPath);
+      const called = await rpc(url, "tools/call", {
+        name: "spice_simulate_op",
+        arguments: {
+          netlist_path: netlistPath,
+          netlist_sha256: sha256,
+          branch_sources: ["Vin"],
+        },
+      });
+      assertEquals(called.body.error, undefined);
+      const result = called.body.result as Record<string, unknown>;
+      const sc = result.structuredContent as Record<string, unknown>;
+      const currents = sc.branch_currents_a as Record<string, number>;
+      assert(
+        Math.abs((currents["Vin"] ?? 0) - (-1e-3)) < 1e-9,
+        `Expected i(Vin) ≈ -1e-3 A, got ${currents["Vin"]}`,
+      );
+    } finally {
+      await http.shutdown();
       await Deno.remove(tmpDir, { recursive: true });
     }
   },
@@ -706,7 +1027,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "spice_simulate_tran returns min/max/final for RC low-pass R=1k C=1µF Vin=1V",
+  name:
+    "spice_simulate_tran selects transient without a caller .tran directive and returns RC statistics",
   ignore: !RUN_NATIVE,
   fn: async () => {
     const tool = allTools.find((t) => t.name === "spice_simulate_tran");
@@ -714,7 +1036,7 @@ Deno.test({
 
     const tmpDir = await Deno.makeTempDir({ prefix: "spice-test-" });
     const netlistPath = `${tmpDir}/rc.cir`;
-    // Circuit-only netlist — no .control block
+    // No .tran or .control: tstep_s/tstop_s and the called tool own the analysis.
     // PULSE: 0→1 V step at t=0, rise=1ns, tstop=6ms → covers > 5τ (τ=1ms)
     await Deno.writeTextFile(
       netlistPath,
@@ -722,7 +1044,6 @@ Deno.test({
 Vin in 0 DC 0 PULSE(0 1 0 1n 1n 10m 20m)
 R1 in out 1000
 C1 out 0 1e-6
-.tran 10u 6m
 .end
 `,
     );

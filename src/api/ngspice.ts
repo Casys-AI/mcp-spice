@@ -4,7 +4,8 @@
  * The server owns the .control block; the caller supplies only the circuit
  * definition.  Two entry points:
  *
- *   runNgspiceOp   — DC operating point (.op): returns one voltage per node.
+ *   runNgspiceOp   — DC operating point (.op): returns requested node
+ *                    voltages and optional voltage-source branch currents.
  *   runNgspiceTran — Transient (.tran): returns min/max/final per node via
  *                    wrdata written to a server-controlled temp file.
  *
@@ -21,7 +22,7 @@
  *     col 2i+1 = v(nodes[i]) value at that time step
  */
 
-import { validateNodeName } from "./netlist-security.ts";
+import { validateNodeName, validateSourceName } from "./netlist-security.ts";
 
 /** Raised when ngspice is absent from PATH. */
 export class NgspiceNotFoundError extends Error {
@@ -43,10 +44,15 @@ export class SpiceError extends Error {
   }
 }
 
-/** DC operating-point result: one voltage per requested node. */
+/** DC operating-point result: requested node voltages and branch currents. */
 export interface OpResult {
   /** Node name (as supplied by the caller) → voltage in volts. */
   nodeVoltages: Record<string, number>;
+  /**
+   * Voltage-source name (caller spelling) → branch current in amperes.
+   * Raw ngspice `i(Vsource)`: positive into the source positive terminal.
+   */
+  branchCurrents: Record<string, number>;
   /** Last 800 chars of ngspice stdout+stderr for traceability. */
   logTail: string;
 }
@@ -178,27 +184,38 @@ async function runNgspiceRaw(
  * The server writes:
  *   .control
  *   op
- *   print v(node1) v(node2) ...
+ *   print v(node1) … i(source1) …
  *   quit
  *   .endc
  *
  * @param circuitContent - Caller's netlist (no .control block).
- * @param nodes          - Node names (e.g. ["out", "in"]).
+ * @param nodes          - Node names (e.g. ["out", "in"]). May be empty when
+ *                         `branchSources` is non-empty.
  * @param timeoutMs      - Kill timeout (default 30 s).
+ * @param branchSources  - Voltage-source names for `i(source)` (e.g. ["Vin"]).
  */
 export async function runNgspiceOp(
   circuitContent: string,
   nodes: string[],
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  branchSources: string[] = [],
 ): Promise<OpResult> {
-  if (nodes.length === 0) {
-    throw new TypeError("nodes must contain at least one node name.");
+  if (nodes.length === 0 && branchSources.length === 0) {
+    throw new TypeError(
+      "At least one of nodes or branchSources must be a non-empty array.",
+    );
   }
   for (const n of nodes) {
     validateNodeName(n, "spice_simulate_op");
   }
+  for (const s of branchSources) {
+    validateSourceName(s, "spice_simulate_op");
+  }
 
-  const printArgs = nodes.map((n) => `v(${n})`).join(" ");
+  const printArgs = [
+    ...nodes.map((n) => `v(${n})`),
+    ...branchSources.map((s) => `i(${s})`),
+  ].join(" ");
   const controlBlock = `.control\nop\nprint ${printArgs}\nquit\n.endc`;
   const netlist = assembleNetlist(circuitContent, controlBlock);
 
@@ -208,22 +225,44 @@ export async function runNgspiceOp(
   const logTail = log.slice(-800);
   const rawMeasurements = parseMeasurements(log);
 
-  // Validate that every requested node was returned and map to plain name.
   const nodeVoltages: Record<string, number> = {};
   for (const node of nodes) {
-    const key = `v(${node.toLowerCase()})`;
-    const entry = rawMeasurements[key];
-    if (entry === undefined) {
-      throw new SpiceError(
-        `[spice_simulate_op] Node "${node}" not found in ngspice output. ` +
-          `Available keys: ${Object.keys(rawMeasurements).join(", ")}. ` +
-          `Log tail: ${logTail}`,
-      );
-    }
-    nodeVoltages[node] = entry.value;
+    nodeVoltages[node] = requirePrintedScalar(
+      rawMeasurements,
+      `v(${node.toLowerCase()})`,
+      `Node "${node}"`,
+      logTail,
+    );
   }
 
-  return { nodeVoltages, logTail };
+  const branchCurrents: Record<string, number> = {};
+  for (const source of branchSources) {
+    branchCurrents[source] = requirePrintedScalar(
+      rawMeasurements,
+      `i(${source.toLowerCase()})`,
+      `Branch source "${source}"`,
+      logTail,
+    );
+  }
+
+  return { nodeVoltages, branchCurrents, logTail };
+}
+
+function requirePrintedScalar(
+  raw: Record<string, SpiceMeasurement>,
+  key: string,
+  label: string,
+  logTail: string,
+): number {
+  const entry = raw[key];
+  if (entry === undefined) {
+    throw new SpiceError(
+      `[spice_simulate_op] ${label} not found in ngspice output. ` +
+        `Available keys: ${Object.keys(raw).join(", ")}. ` +
+        `Log tail: ${logTail}`,
+    );
+  }
+  return entry.value;
 }
 
 // ---------------------------------------------------------------------------
@@ -386,8 +425,13 @@ export interface SpiceMeasurement {
  *
  * Matches lines of the form (case-insensitive):
  *   v(out) = 2.000000e+00
+ *   v(out-1) = 1.250000e+00
  *   vmax   =  5.382215e-01  at=  1.500001e-03
  *   i(vin) = -1.00000e-03
+ *   i(v-in) = -2.50000e-03
+ *
+ * Selector names use the same alphabet as validateNodeName / validateSourceName
+ * (letters, digits, underscore, dot, hyphen, #, plus the v()/i() wrappers).
  *
  * Lines starting with "Index" (table headers from `print all`) are skipped.
  */
@@ -396,7 +440,7 @@ export function parseMeasurements(
 ): Record<string, SpiceMeasurement> {
   const results: Record<string, SpiceMeasurement> = {};
   const lineRe =
-    /^([\w()#.]+)\s*=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?:\s+at=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?))?/;
+    /^([\w()#.\-]+)\s*=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?:\s+at=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?))?/;
 
   for (const rawLine of log.split("\n")) {
     const line = rawLine.trim();

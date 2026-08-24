@@ -23,7 +23,7 @@ const TOOL_NAME = "spice_simulate_tran";
 const NOT_CHECKED = [
   "Temperature: simulation runs at TNOM=27°C unless the netlist overrides .TEMP or .OPTIONS TNOM.",
   "Adaptive time step: ngspice uses internal step control; the actual n_points is not tstop_s / tstep_s.",
-  "Initial conditions: ngspice computes a DC operating point as initial condition unless the netlist specifies .IC or UIC.",
+  "Initial conditions: the server-owned transient command does not expose UIC; ngspice computes a DC operating point before the transient.",
   "Monte Carlo / worst-case analysis is not performed.",
   "Non-linear component models require .model definitions embedded in the netlist; no model library is provided by this server.",
   "Branch currents are not returned; only node voltages are extracted.",
@@ -40,7 +40,8 @@ const INPUT_SCHEMA: Record<string, unknown> = {
       description: "Absolute path to the SPICE netlist (.cir / .sp / .spi). " +
         "Optional when the netlist was admitted by ngspice_netlist_submit: " +
         "omit the path and pass the returned sha256 (and optionally uri). " +
-        "The netlist must contain only circuit elements and a .tran directive. " +
+        "Supply circuit and inline model definitions. A .tran directive may be " +
+        "present but is not required and does not select the server operation. " +
         "Do NOT include a .control block — the server writes it. " +
         "Forbidden: .control, .include, .lib, .shell, absolute paths.",
     },

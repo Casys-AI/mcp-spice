@@ -1,9 +1,9 @@
 /**
  * Fail-closed netlist security validation.
  *
- * The caller's netlist must contain ONLY the circuit definition: component
- * declarations, model definitions (.model, .param, .global, .subckt/.ends),
- * and the simulation type directive (.op / .tran / .ac / .dc).
+ * The caller's netlist may contain circuit and inline model definitions
+ * (.model, .param, .global, .subckt/.ends). Analysis directives may be present,
+ * but they are optional and do not select or override the server operation.
  *
  * The server owns the .control block. Any attempt to inject control
  * directives, load external files, or reference absolute paths is rejected
@@ -32,13 +32,13 @@ export class NetlistSecurityError extends Error implements MachineReadableErrorF
   readonly code = "netlist_forbidden_directive";
   readonly context: Record<string, unknown>;
   readonly recovery =
-    "Remove the forbidden construct from the netlist. Supply only circuit elements, model definitions, and a simulation type directive. The server owns the .control block.";
+    "Remove the forbidden construct from the netlist. Supply circuit and inline model definitions. Analysis directives may be present but do not select or override the server operation; the server owns the .control block.";
 
   constructor(directive: string, toolName: string) {
     super(
       `[${toolName}] Forbidden directive in netlist: "${directive}". ` +
-        "The netlist must contain only circuit elements, model definitions, " +
-        "and a simulation type directive (.op / .tran / .ac / .dc). " +
+        "Supply circuit and inline model definitions. Analysis directives may " +
+        "be present but do not select or override the server operation. " +
         "The server manages the .control block.",
     );
     this.name = "NetlistSecurityError";
@@ -103,6 +103,26 @@ export function validateNetlistSecurity(
   }
 }
 
+/** Characters allowed in SPICE node and source names interpolated into `.control`. */
+const SPICE_IDENTIFIER = /^[a-zA-Z0-9_.\-#]+$/;
+
+function validateSpiceIdentifier(
+  name: string,
+  toolName: string,
+  kind: "node" | "source",
+): void {
+  if (kind === "node" && name === "0") return; // ground node is always valid
+  if (name.length === 0 || !SPICE_IDENTIFIER.test(name)) {
+    const label = kind === "node" ? "node" : "source";
+    const labelCap = kind === "node" ? "Node" : "Source";
+    throw new TypeError(
+      `[${toolName}] Invalid ${label} name: "${name}". ` +
+        `${labelCap} names must contain only letters, digits, underscores, dots, ` +
+        "hyphens, and #.",
+    );
+  }
+}
+
 /**
  * Validate a node name as safe to interpolate into a .control block.
  *
@@ -116,12 +136,16 @@ export function validateNetlistSecurity(
  * @throws {TypeError} When the name contains forbidden characters.
  */
 export function validateNodeName(name: string, toolName: string): void {
-  if (name === "0") return; // ground node is always valid
-  if (!/^[a-zA-Z0-9_.\-#]+$/.test(name) || name.length === 0) {
-    throw new TypeError(
-      `[${toolName}] Invalid node name: "${name}". ` +
-        "Node names must contain only letters, digits, underscores, dots, " +
-        "hyphens, and #.",
-    );
-  }
+  validateSpiceIdentifier(name, toolName, "node");
+}
+
+/**
+ * Validate a voltage-source name as safe to interpolate into `print i(name)`.
+ *
+ * Uses the same injection-safe identifier alphabet as {@link validateNodeName}.
+ *
+ * @throws {TypeError} When the name contains forbidden characters.
+ */
+export function validateSourceName(name: string, toolName: string): void {
+  validateSpiceIdentifier(name, toolName, "source");
 }

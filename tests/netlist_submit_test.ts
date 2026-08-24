@@ -23,7 +23,6 @@ const VDIV = `Voltage Divider R1=1k R2=2k Vin=3V
 Vin in 0 DC 3
 R1 in out 1000
 R2 out 0 2000
-.op
 .end
 `;
 

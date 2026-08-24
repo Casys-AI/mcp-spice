@@ -34,6 +34,7 @@ export {
   NetlistSecurityError,
   validateNetlistSecurity,
   validateNodeName,
+  validateSourceName,
 } from "./src/api/netlist-security.ts";
 export { resolveSimulationNetlist } from "./src/api/netlist-resolve.ts";
 export {

@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - unpublished
+
+This checkout prepares 0.4.0; it is not published. Until publication,
+`branch_sources` / `branch_currents_a` are prepared-source/local-image
+behavior. Published JSR `@0.3.0` and the digest-pinned published image do
+not expose them.
+
+### Added
+
+- `spice_simulate_op` optional `branch_sources[]`: DC branch currents as
+  `branch_currents_a` (amperes), keyed by the caller-supplied source spelling.
+  At least one of `nodes` or `branch_sources` is required. `measurements`
+  remains voltage-only. Returned currents are raw ngspice `i(Vsource)`:
+  positive into the voltage source positive terminal; a delivering source
+  normally appears negative. Transient analysis still does not return branch
+  currents.
+
+### Fixed
+
+- `parseMeasurements` accepts hyphenated SPICE names already allowed by
+  `validateNodeName` (for example `v(out-1)` and `i(v-in)`).
+- Server runtime identity (`server/discover`, `/health`) reports `0.4.0`,
+  matching `deno.json`. Published JSR `@0.3.0` and the digest-pinned image
+  still report `0.1.0` from the leftover `VERSION` in `server.ts`.
+
 ## [0.3.0] - 2026-08-15
 
 ### Added
@@ -93,7 +118,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `tests/fixtures/rc_tran_wrdata.dat` — 626 adaptive rows, 4 columns (2 nodes);
     `v(out)` final at t=6 ms: `9.97521370e-01 V ≈ 1−e⁻⁶`.
 
-- Test suite: 28 tests total, 22 unconditional, 6 gated by `SPICE_RUN_NATIVE=1`.
+- Test suite: deterministic unit coverage plus native checks gated by
+  `SPICE_RUN_NATIVE=1`.
 
 ### Engine baseline
 
