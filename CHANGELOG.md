@@ -4,12 +4,7 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - unpublished
-
-This checkout prepares 0.4.0; it is not published. Until publication,
-`branch_sources` / `branch_currents_a` are prepared-source/local-image
-behavior. Published JSR `@0.3.0` and the digest-pinned published image do
-not expose them.
+## [0.4.0] - 2026-08-25
 
 ### Added
 
@@ -26,8 +21,9 @@ not expose them.
 - `parseMeasurements` accepts hyphenated SPICE names already allowed by
   `validateNodeName` (for example `v(out-1)` and `i(v-in)`).
 - Server runtime identity (`server/discover`, `/health`) reports `0.4.0`,
-  matching `deno.json`. Published JSR `@0.3.0` and the digest-pinned image
-  still report `0.1.0` from the leftover `VERSION` in `server.ts`.
+  matching `deno.json`. Historical 0.3.0 context: published JSR `@0.3.0` and
+  that release's digest-pinned image reported `0.1.0` from leftover `VERSION`
+  in `server.ts`.
 
 ## [0.3.0] - 2026-08-15
 

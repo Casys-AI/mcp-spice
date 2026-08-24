@@ -7,36 +7,34 @@ compact, structured results tied to the exact input bytes.
 [container image](https://github.com/Casys-AI/mcp-spice/pkgs/container/mcp-spice) ·
 [changelog](CHANGELOG.md) · [security policy](SECURITY.md)
 
-**Release status.** This checkout prepares unpublished package/server version 0.4.0.
+**Release status.** The current published package and image are `@casys/mcp-spice`
+version `0.4.0`. Package metadata and runtime server identity both report `0.4.0`.
 
-Executable JSR examples pin `jsr:@casys/mcp-spice@0.3.0`. Executable Docker examples
-that demonstrate the published 0.3.0 contract pin the immutable multi-architecture
-image digest. `:latest` is a mutable convenience tag, not the authority for a version
-or capability. Operating-point voltage-source branch currents (`branch_sources` /
-`branch_currents_a`) are prepared-source/local-image behavior until 0.4.0 is published.
+Executable JSR examples pin `jsr:@casys/mcp-spice@0.4.0`. Executable Docker examples
+pin the immutable multi-architecture image digest. `:latest` is a mutable convenience
+tag, not the authority for a version or capability. Operating-point voltage-source
+branch currents (`branch_sources` / `branch_currents_a`) are published 0.4.0 behavior.
 
-The published JSR `@0.3.0` package and the digest-pinned image have package
-version `0.3.0` (`deno.json`; `/app/deno.json` in the image). Their `server.ts`
-still has legacy `VERSION` `0.1.0`, so `server/discover` and `/health` report
-runtime identity `0.1.0`. This checkout aligns package and server metadata at
-`0.4.0`.
+Historical 0.3.0 context: that release's JSR package and digest-pinned image had
+package version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant
+`server/discover` and `/health` reported runtime identity `0.1.0`. 0.3.0
+`spice_simulate_op` required `nodes[]`, rejected `branch_sources`, and did not return
+`branch_currents_a`.
 
-Since v0.3.0, a client can send a netlist directly over MCP. The server verifies its
-declared SHA-256, applies the netlist security policy, stores the bytes under their
-digest, and returns a reusable content-addressed reference. A shared host filesystem or
-`docker exec` is no longer required for the normal workflow.
+A client can send a netlist directly over MCP. The server verifies its declared
+SHA-256, applies the netlist security policy, stores the bytes under their digest,
+and returns a reusable content-addressed reference. A shared host filesystem or
+`docker exec` is not required for the normal workflow.
 
-The published 0.3.0 package and digest-pinned image can:
+The published 0.4.0 package and digest-pinned image can:
 
 - admit exact UTF-8 circuit netlists into an immutable, content-addressed store;
-- run a DC operating point and return requested node voltages;
+- run a DC operating point and return requested node voltages and requested
+  voltage-source branch currents;
 - run a transient analysis and return min, max, and final voltage for each requested
   node;
 - attest every consumed netlist with its SHA-256 and byte length;
 - serve stateless MCP over HTTP or classic MCP clients through its stdio adapter.
-
-This unpublished 0.4.0 checkout additionally lets `spice_simulate_op` return requested
-voltage-source branch currents.
 
 `mcp-spice` is a numerical engine. It reports observations and declared analysis limits;
 it does not decide whether a circuit satisfies a requirement.
@@ -45,16 +43,15 @@ it does not decide whether a circuit satisfies a requirement.
 
 ### Published Docker image over HTTP
 
-The command below runs the published multi-architecture 0.3.0 image by digest. It does
-not include this checkout's unpublished branch-current output. The image contains Deno
-and the tested ngspice 44.2 baseline. The named volume preserves submitted netlists
-across container restarts.
+The command below runs the published multi-architecture 0.4.0 image by digest. The
+image contains Deno and the tested ngspice 44.2 baseline. The named volume preserves
+submitted netlists across container restarts.
 
 ```bash
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:e499519d70e6775580a4a913978e0b931a1131a84185370938c5bb7a1443cf69 http
+  ghcr.io/casys-ai/mcp-spice@sha256:a75f202e6d7a382a6a5071087531741615372c849920422d00888ddb18a98e13 http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. This repository's native HTTP transport
@@ -72,13 +69,12 @@ curl -sS -X POST http://127.0.0.1:3023/mcp \
 For a raw `tools/call` request, also set `Mcp-Name` to the exact tool name in
 `params.name`. MCP clients and the stdio adapter build this transport envelope for you.
 
-`:latest` is a mutable convenience tag, not the authority for the 0.3.0 contract or
-for this checkout's prepared 0.4.0 capabilities. Use the digest above for a
-reproducible or production deployment.
+`:latest` is a mutable convenience tag, not the authority for the 0.4.0 contract. Use
+the digest above for a reproducible or production deployment.
 
 ### Published Docker image over stdio
 
-The same digest-pinned 0.3.0 image's `stdio` mode adapts the classic MCP initialize
+The same digest-pinned 0.4.0 image's `stdio` mode adapts the classic MCP initialize
 handshake used by desktop hosts and Docker MCP clients to the server's stateless HTTP
 transport. A generic client configuration is:
 
@@ -93,7 +89,7 @@ transport. A generic client configuration is:
         "-i",
         "-v",
         "mcp-spice-runs:/ngspice-runs",
-        "ghcr.io/casys-ai/mcp-spice@sha256:e499519d70e6775580a4a913978e0b931a1131a84185370938c5bb7a1443cf69",
+        "ghcr.io/casys-ai/mcp-spice@sha256:a75f202e6d7a382a6a5071087531741615372c849920422d00888ddb18a98e13",
         "stdio"
       ]
     }
@@ -114,13 +110,13 @@ brew install ngspice
 # Debian / Ubuntu
 sudo apt install ngspice
 
-deno run --allow-all jsr:@casys/mcp-spice@0.3.0/server --port=3023
+deno run --allow-all jsr:@casys/mcp-spice@0.4.0/server --port=3023
 ```
 
-`@0.3.0` is the version actually published on JSR. `@0.4.0` is not published. Do not
-expect branch currents from the JSR module or from the digest-pinned published image.
+`@0.4.0` is the version published on JSR. A source checkout and a locally built image
+tag are development artifacts; they are not the digest-pinned published image.
 
-For the unpublished 0.4.0 branch-current capability, run this checkout:
+For local development from this source checkout:
 
 ```bash
 deno task serve
@@ -135,9 +131,9 @@ content-addressed store helpers for embedding in a Deno application.
 
 ## MCP tools
 
-The table below describes this unpublished 0.4.0 checkout. On published 0.3.0 (JSR
-`@0.3.0` and the digest-pinned image), `spice_simulate_op` requires `nodes[]`, rejects
-`branch_sources`, and does not return `branch_currents_a`.
+The table below describes published 0.4.0 (JSR `@0.4.0` and the digest-pinned image).
+Historical 0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected
+`branch_sources`, and did not return `branch_currents_a`.
 
 | Tool                     | Purpose                                       | Required input                                                                                                        | Structured result                                                                     |
 | ------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -180,8 +176,8 @@ different bytes at an existing digest is refused before a mutable object can be 
 
 ### 2. Run the operating point
 
-Pass the returned digest and, optionally, its URI to `spice_simulate_op`. This call is
-valid on published 0.3.0 (JSR `@0.3.0` and the digest-pinned image):
+Pass the returned digest and, optionally, its URI to `spice_simulate_op`. This call
+requests node voltages only:
 
 ```json
 {
@@ -193,7 +189,7 @@ valid on published 0.3.0 (JSR `@0.3.0` and the digest-pinned image):
 
 The structured result contains the requested voltages and the identity of the private
 snapshot consumed by ngspice. This example is abridged only to shorten the
-`not_checked` list. Published 0.3.0 does not return `branch_currents_a`:
+`not_checked` list:
 
 ```json
 {
@@ -215,11 +211,9 @@ snapshot consumed by ngspice. This example is abridged only to shorten the
 
 `source_path` is provider-local provenance, not a path the client must be able to read.
 
-#### Prepared source: operating-point branch currents (unpublished 0.4.0)
+#### Operating-point branch currents
 
-Until 0.4.0 is published, `branch_sources` and `branch_currents_a` are
-prepared-source/local-image behavior. They are not available from JSR `@0.3.0` or from
-the digest-pinned published image.
+Published 0.4.0 accepts `branch_sources` and returns `branch_currents_a`:
 
 ```json
 {
@@ -230,7 +224,7 @@ the digest-pinned published image.
 }
 ```
 
-This checkout returns `branch_currents_a` in addition to the 0.3.0 voltage fields:
+The result includes `branch_currents_a` in addition to the voltage fields:
 
 ```json
 {
@@ -298,10 +292,10 @@ point count is adaptive and is therefore not necessarily `tstop_s / tstep_s`.
 The caller supplies circuit and inline model definitions. An `.op` or `.tran` directive
 may be present, as in the examples, but is not required and does not select the server
 operation. The called MCP tool owns the analysis and appends the `.control` block that
-runs it and extracts the requested node voltages and, in this unpublished 0.4.0
-checkout, any requested voltage-source branch currents on a DC operating point.
-Published 0.3.0 extracts node voltages only. A terminal `.end` is accepted and
-replaced when the server assembles the executable netlist.
+runs it and extracts the requested node voltages and, on a DC operating point, any
+requested voltage-source branch currents. Historical 0.3.0 extracted node voltages
+only. A terminal `.end` is accepted and replaced when the server assembles the
+executable netlist.
 
 Inline ngspice constructs such as `.model`, `.param`, `.global`, and `.subckt`/`.ends`
 can be used. This makes self-contained non-linear devices and reusable subcircuits
@@ -315,9 +309,8 @@ The following caller-controlled constructs are rejected before ngspice starts:
 - whitespace-delimited absolute paths beginning with `/` or `~/`.
 
 Requested node names are validated before interpolation into the server-owned control
-block. In this unpublished 0.4.0 checkout, operating-point voltage-source names are
-validated the same way. Names may contain letters, digits, underscores, dots, hyphens,
-and `#`; ground is `0`.
+block. Operating-point voltage-source names are validated the same way. Names may
+contain letters, digits, underscores, dots, hyphens, and `#`; ground is `0`.
 
 There are two mutually exclusive input modes:
 
@@ -348,23 +341,23 @@ Every successful tool response has a short text `content` summary and closed
   `{ "code", "context", "recovery" }`. Examples include `netlist_sha256_mismatch`,
   `netlist_forbidden_directive`, `netlist_not_in_store`, and `ambiguous_netlist_source`.
 - ngspice non-zero exits, error/fatal log lines, missing transient output, and absent
-  requested nodes fail the tool call instead of returning partial success. In this
-  unpublished 0.4.0 checkout, absent requested branch sources fail the same way.
+  requested nodes fail the tool call instead of returning partial success. Absent
+  requested branch sources fail the same way.
 
 The digest proves which bytes this process consumed. It does not, by itself, turn a
 numerical result into a requirement verdict or a qualified engineering claim.
 
 ## Current analysis scope
 
-The present MCP surface is deliberately small. This unpublished 0.4.0 checkout exposes
-operating-point node voltages plus requested voltage-source branch currents, and
-transient voltage min/max/final summaries. It does not expose a DC sweep, AC analysis,
-noise analysis, Monte Carlo, caller-supplied control scripts, or waveform samples.
-Published 0.3.0 is the same bound without the branch currents.
+The present MCP surface is deliberately small. Published 0.4.0 exposes operating-point
+node voltages plus requested voltage-source branch currents, and transient voltage
+min/max/final summaries. It does not expose a DC sweep, AC analysis, noise analysis,
+Monte Carlo, caller-supplied control scripts, or waveform samples. Historical 0.3.0
+was the same bound without the branch currents.
 
 | Area                 | Current behavior                                                                      |
 | -------------------- | ------------------------------------------------------------------------------------- |
-| DC                   | One `.op` point. Published 0.3.0 returns requested node voltages. This checkout also returns requested voltage-source branch currents. |
+| DC                   | One `.op` point. Returns requested node voltages and requested voltage-source branch currents. |
 | Transient            | Requested node voltage min/max/final plus adaptive point count; no branch currents    |
 | Initial conditions   | Server-owned transient command uses a DC operating point; UIC is not exposed          |
 | Temperature          | ngspice default TNOM 27°C unless the netlist supplies `.TEMP` or `.OPTIONS TNOM`      |
@@ -427,7 +420,8 @@ workspace's provider reference, not by this standalone server README.
 
 ## Development
 
-Commands in this section, run in this checkout, exercise unpublished 0.4.0.
+Commands in this section run against this source checkout. They validate the local
+sources; they are not a substitute for the digest-pinned published image.
 
 ```bash
 deno task check          # type-check
@@ -444,8 +438,8 @@ Regenerate engine fixtures only with ngspice available:
 deno run --allow-all scripts/gen_fixtures.ts
 ```
 
-Build the local container from this unpublished 0.4.0 checkout (including branch
-currents). That local tag is not the digest-pinned published 0.3.0 image:
+Build a local container from this source checkout. That local tag is not the
+digest-pinned published 0.4.0 image:
 
 ```bash
 docker build -t mcp-spice:local .
