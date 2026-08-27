@@ -7,13 +7,14 @@ compact, structured results tied to the exact input bytes.
 [container image](https://github.com/Casys-AI/mcp-spice/pkgs/container/mcp-spice) ·
 [changelog](CHANGELOG.md) · [security policy](SECURITY.md)
 
-**Release status.** The current published package and image are `@casys/mcp-spice`
-version `0.4.0`. Package metadata and runtime server identity both report `0.4.0`.
+**Release status.** This source/package release is `@casys/mcp-spice` version `0.4.1`.
+Package metadata and runtime server identity both report `0.4.1`.
 
-Executable JSR examples pin `jsr:@casys/mcp-spice@0.4.0`. Executable Docker examples
-pin the immutable multi-architecture image digest. `:latest` is a mutable convenience
-tag, not the authority for a version or capability. Operating-point voltage-source
-branch currents (`branch_sources` / `branch_currents_a`) are published 0.4.0 behavior.
+Executable JSR examples pin `jsr:@casys/mcp-spice@0.4.1`. Docker examples retain the
+immutable digest of the previously published 0.4.0 HTTP image. `:latest` is a mutable
+convenience tag, not the authority for a version or capability. Operating-point
+voltage-source branch currents (`branch_sources` / `branch_currents_a`) remain part of
+the 0.4.1 surface.
 
 Historical 0.3.0 context: that release's JSR package and digest-pinned image had
 package version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant
@@ -26,7 +27,7 @@ SHA-256, applies the netlist security policy, stores the bytes under their diges
 and returns a reusable content-addressed reference. A shared host filesystem or
 `docker exec` is not required for the normal workflow.
 
-The published 0.4.0 package and digest-pinned image can:
+The 0.4.1 source/package surface can:
 
 - admit exact UTF-8 circuit netlists into an immutable, content-addressed store;
 - run a DC operating point and return requested node voltages and requested
@@ -34,18 +35,18 @@ The published 0.4.0 package and digest-pinned image can:
 - run a transient analysis and return min, max, and final voltage for each requested
   node;
 - attest every consumed netlist with its SHA-256 and byte length;
-- serve stateless MCP over HTTP or classic MCP clients through its stdio adapter.
+- serve stateless MCP over HTTP or framework-native, era-aware stdio.
 
 `mcp-spice` is a numerical engine. It reports observations and declared analysis limits;
 it does not decide whether a circuit satisfies a requirement.
 
 ## Quick start
 
-### Published Docker image over HTTP
+### Previously published 0.4.0 Docker image over HTTP
 
-The command below runs the published multi-architecture 0.4.0 image by digest. The
-image contains Deno and the tested ngspice 44.2 baseline. The named volume preserves
-submitted netlists across container restarts.
+The command below runs the previously published multi-architecture 0.4.0 HTTP image by
+digest. The image contains Deno and the tested ngspice 44.2 baseline. The named volume
+preserves submitted netlists across container restarts.
 
 ```bash
 docker run --rm \
@@ -67,37 +68,40 @@ curl -sS -X POST http://127.0.0.1:3023/mcp \
 ```
 
 For a raw `tools/call` request, also set `Mcp-Name` to the exact tool name in
-`params.name`. MCP clients and the stdio adapter build this transport envelope for you.
+`params.name`. Native stdio clients do not use this HTTP transport envelope.
 
 `:latest` is a mutable convenience tag, not the authority for the 0.4.0 contract. Use
 the digest above for a reproducible or production deployment.
 
-### Published Docker image over stdio
+### Native stdio from 0.4.1
 
-The same digest-pinned 0.4.0 image's `stdio` mode adapts the classic MCP initialize
-handshake used by desktop hosts and Docker MCP clients to the server's stateless HTTP
-transport. A generic client configuration is:
+Version 0.4.1's `--stdio` starts the framework-native, era-aware stdio transport
+directly. It accepts the classic `2025-06-18` initialize handshake and writes only
+JSON-RPC messages to stdout. Running from a source checkout still requires ngspice on
+`PATH`:
 
-```json
-{
-  "mcpServers": {
-    "spice": {
-      "command": "docker",
-      "args": [
-        "run",
-        "--rm",
-        "-i",
-        "-v",
-        "mcp-spice-runs:/ngspice-runs",
-        "ghcr.io/casys-ai/mcp-spice@sha256:a75f202e6d7a382a6a5071087531741615372c849920422d00888ddb18a98e13",
-        "stdio"
-      ]
-    }
-  }
-}
+```bash
+deno run --allow-all server.ts --stdio
 ```
 
-Keep `-i`: MCP messages travel through the container's stdin and stdout.
+The equivalent version-pinned JSR command is:
+
+```bash
+deno run --allow-all jsr:@casys/mcp-spice@0.4.1/server --stdio
+```
+
+The JSR module also requires an `ngspice` executable on `PATH`.
+
+After building this checkout locally, the equivalent container command is:
+
+```bash
+docker run --rm -i \
+  -v mcp-spice-runs:/ngspice-runs \
+  mcp-spice:local stdio
+```
+
+The digest-pinned 0.4.0 image remains the previously published HTTP artifact; it does
+not gain the 0.4.1 native stdio path.
 
 ### JSR or a source checkout
 
@@ -110,11 +114,11 @@ brew install ngspice
 # Debian / Ubuntu
 sudo apt install ngspice
 
-deno run --allow-all jsr:@casys/mcp-spice@0.4.0/server --port=3023
+deno run --allow-all jsr:@casys/mcp-spice@0.4.1/server --port=3023
 ```
 
-`@0.4.0` is the version published on JSR. A source checkout and a locally built image
-tag are development artifacts; they are not the digest-pinned published image.
+The version-pinned JSR command and a source checkout are separate from the
+digest-pinned, previously published 0.4.0 image.
 
 For local development from this source checkout:
 
@@ -131,7 +135,9 @@ content-addressed store helpers for embedding in a Deno application.
 
 ## MCP tools
 
-The table below describes published 0.4.0 (JSR `@0.4.0` and the digest-pinned image).
+The table below describes the 0.4.1 source/package tool surface. The previously
+published, digest-pinned 0.4.0 image has the same tool surface but only the HTTP
+transport documented above.
 Historical 0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected
 `branch_sources`, and did not return `branch_currents_a`.
 
@@ -349,7 +355,7 @@ numerical result into a requirement verdict or a qualified engineering claim.
 
 ## Current analysis scope
 
-The present MCP surface is deliberately small. Published 0.4.0 exposes operating-point
+The present MCP surface is deliberately small. Version 0.4.1 exposes operating-point
 node voltages plus requested voltage-source branch currents, and transient voltage
 min/max/final summaries. It does not expose a DC sweep, AC analysis, noise analysis,
 Monte Carlo, caller-supplied control scripts, or waveform samples. Historical 0.3.0

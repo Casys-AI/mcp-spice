@@ -13,7 +13,7 @@
  *                    wrdata layout: col 0=time, col 1=v(out), col 2=time, col 3=v(in)
  */
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { NetlistArtifactError } from "../src/api/netlist-artifact.ts";
 import {
   NetlistSecurityError,
@@ -21,7 +21,7 @@ import {
 } from "../src/api/netlist-security.ts";
 import { parseMeasurements, parseWrdata, SpiceError } from "../src/api/ngspice.ts";
 import { allTools } from "../src/tools/mod.ts";
-import { createSpiceServer } from "../server.ts";
+import { createSpiceServer, parseCli } from "../server.ts";
 
 const RUN_NATIVE = Deno.env.get("SPICE_RUN_NATIVE") === "1";
 const PACKAGE_VERSION = (JSON.parse(
@@ -36,6 +36,25 @@ let nextPort = 14200;
 function freePort(): number {
   return nextPort++;
 }
+
+Deno.test("parseCli selects native stdio without an HTTP selector", () => {
+  assertEquals(parseCli(["--stdio"]).stdio, true);
+});
+
+Deno.test("parseCli rejects stdio mixed with explicit HTTP selectors", () => {
+  for (
+    const args of [
+      ["--stdio", "--port=3023"],
+      ["--hostname=127.0.0.1", "--stdio"],
+    ]
+  ) {
+    assertThrows(
+      () => parseCli(args),
+      TypeError,
+      "--stdio cannot be combined with --port or --hostname",
+    );
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Wire test — MCP stateless protocol

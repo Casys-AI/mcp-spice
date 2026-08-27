@@ -55,15 +55,14 @@ RUN { grep -iv '^\.end[[:space:]]*$' /tmp/vdiv_base.cir; \
 COPY deno.json deno.lock ./
 COPY mod.ts server.ts ./
 COPY src/ ./src/
-COPY scripts/ ./scripts/
 COPY docker-entrypoint.sh ./
 
 # ── Cache Deno dependencies at build time ────────────────────────────────────
 # The committed deno.lock is authoritative; network access is needed here to
 # reach jsr.io.  Once cached in /deno-dir the container starts without network.
-# stdio-shim.ts pulls @std/streams which is not imported by server.ts — cache
-# it explicitly so the container can run in stdio mode without network.
-RUN deno cache --lock=deno.lock server.ts mod.ts scripts/stdio-shim.ts
+# Both HTTP and stdio modes start server.ts directly, so cache the runtime
+# entrypoints during the image build.
+RUN deno cache --lock=deno.lock server.ts mod.ts
 
 EXPOSE 3023
 

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.4.1] - 2026-08-27
+
+### Fixed
+
+- Stdio mode now uses the framework-native, era-aware MCP transport directly. A real
+  legacy `2025-06-18` initialize plus submission regression protects the direct path.
+
 ## [0.4.0] - 2026-08-25
 
 ### Added

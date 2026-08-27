@@ -12,7 +12,7 @@ import { McpApp } from "@casys/mcp-server";
 import { mapSpiceToolError } from "./src/api/tool-error.ts";
 import { SpiceToolsClient } from "./src/client.ts";
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 const DEFAULT_PORT = 3023;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 
@@ -54,17 +54,23 @@ export function createSpiceServer(
   return { app };
 }
 
-interface CliArgs {
+export interface CliArgs {
   port: number;
   hostname: string;
+  stdio: boolean;
 }
 
-function parseCli(args: string[]): CliArgs {
+export function parseCli(args: string[]): CliArgs {
   let port = parseInt(Deno.env.get("MCP_PORT") ?? "", 10) || DEFAULT_PORT;
   let hostname = Deno.env.get("MCP_HOSTNAME") ?? DEFAULT_HOSTNAME;
+  let stdio = false;
+  let hasHttpCliOption = false;
 
   for (const arg of args) {
-    if (arg.startsWith("--port=")) {
+    if (arg === "--stdio") {
+      stdio = true;
+    } else if (arg.startsWith("--port=")) {
+      hasHttpCliOption = true;
       const n = parseInt(arg.slice("--port=".length), 10);
       if (isNaN(n) || n < 1 || n > 65535) {
         throw new TypeError(
@@ -73,26 +79,35 @@ function parseCli(args: string[]): CliArgs {
       }
       port = n;
     } else if (arg.startsWith("--hostname=")) {
+      hasHttpCliOption = true;
       hostname = arg.slice("--hostname=".length);
     } else {
       throw new TypeError(`Unknown argument: ${arg}`);
     }
   }
 
-  return { port, hostname };
+  if (stdio && hasHttpCliOption) {
+    throw new TypeError("--stdio cannot be combined with --port or --hostname.");
+  }
+
+  return { port, hostname, stdio };
 }
 
 if (import.meta.main) {
   const cli = parseCli(Deno.args);
   const { app } = createSpiceServer();
-  await app.startHttp({
-    port: cli.port,
-    hostname: cli.hostname,
-    corsOrigins: ["http://127.0.0.1", "http://localhost"],
-    onListen: ({ hostname, port }) => {
-      console.error(
-        `[mcp-spice] Stateless MCP: http://${hostname}:${port}/mcp`,
-      );
-    },
-  });
+  if (cli.stdio) {
+    await app.start();
+  } else {
+    await app.startHttp({
+      port: cli.port,
+      hostname: cli.hostname,
+      corsOrigins: ["http://127.0.0.1", "http://localhost"],
+      onListen: ({ hostname, port }) => {
+        console.error(
+          `[mcp-spice] Stateless MCP: http://${hostname}:${port}/mcp`,
+        );
+      },
+    });
+  }
 }
