@@ -10,11 +10,12 @@ compact, structured results tied to the exact input bytes.
 **Release status.** This source/package release is `@casys/mcp-spice` version `0.4.1`.
 Package metadata and runtime server identity both report `0.4.1`.
 
-Executable JSR examples pin `jsr:@casys/mcp-spice@0.4.1`. Docker examples retain the
-immutable digest of the previously published 0.4.0 HTTP image. `:latest` is a mutable
-convenience tag, not the authority for a version or capability. Operating-point
-voltage-source branch currents (`branch_sources` / `branch_currents_a`) remain part of
-the 0.4.1 surface.
+Executable JSR examples pin `jsr:@casys/mcp-spice@0.4.1`. Docker examples pin the
+published 0.4.1 release-code image by immutable digest. It is published for
+`linux/amd64` and `linux/arm64`, and its revision matches the 0.4.1 release commit.
+`:latest` is a mutable convenience tag, not the authority for a version or capability.
+Operating-point voltage-source branch currents (`branch_sources` /
+`branch_currents_a`) remain part of the 0.4.1 surface.
 
 Historical 0.3.0 context: that release's JSR package and digest-pinned image had
 package version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant
@@ -42,17 +43,19 @@ it does not decide whether a circuit satisfies a requirement.
 
 ## Quick start
 
-### Previously published 0.4.0 Docker image over HTTP
+### Published 0.4.1 Docker image
 
-The command below runs the previously published multi-architecture 0.4.0 HTTP image by
-digest. The image contains Deno and the tested ngspice 44.2 baseline. The named volume
-preserves submitted netlists across container restarts.
+The published multi-architecture 0.4.1 release-code image is pinned below by digest.
+Its entrypoint is `./docker-entrypoint.sh` and its `CMD` is `http`; the command below
+therefore starts the stateless HTTP transport. The image contains Deno and the tested
+ngspice 44.2 baseline. The named volume preserves submitted netlists across container
+restarts.
 
 ```bash
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:a75f202e6d7a382a6a5071087531741615372c849920422d00888ddb18a98e13 http
+  ghcr.io/casys-ai/mcp-spice@sha256:fb13d8b72feec191977bb1ffbfa12e2d7e34765678f2855bed34aae85b80df28 http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. This repository's native HTTP transport
@@ -70,7 +73,7 @@ curl -sS -X POST http://127.0.0.1:3023/mcp \
 For a raw `tools/call` request, also set `Mcp-Name` to the exact tool name in
 `params.name`. Native stdio clients do not use this HTTP transport envelope.
 
-`:latest` is a mutable convenience tag, not the authority for the 0.4.0 contract. Use
+`:latest` is a mutable convenience tag, not the authority for the 0.4.1 contract. Use
 the digest above for a reproducible or production deployment.
 
 ### Native stdio from 0.4.1
@@ -92,16 +95,15 @@ deno run --allow-all jsr:@casys/mcp-spice@0.4.1/server --stdio
 
 The JSR module also requires an `ngspice` executable on `PATH`.
 
-After building this checkout locally, the equivalent container command is:
+The published image runs the same native stdio mode when `stdio` is passed to Docker:
 
 ```bash
 docker run --rm -i \
   -v mcp-spice-runs:/ngspice-runs \
-  mcp-spice:local stdio
+  ghcr.io/casys-ai/mcp-spice@sha256:fb13d8b72feec191977bb1ffbfa12e2d7e34765678f2855bed34aae85b80df28 stdio
 ```
 
-The digest-pinned 0.4.0 image remains the previously published HTTP artifact; it does
-not gain the 0.4.1 native stdio path.
+Passing `stdio` overrides the image's `CMD http`; it does not start an HTTP child.
 
 ### JSR or a source checkout
 
@@ -118,7 +120,7 @@ deno run --allow-all jsr:@casys/mcp-spice@0.4.1/server --port=3023
 ```
 
 The version-pinned JSR command and a source checkout are separate from the
-digest-pinned, previously published 0.4.0 image.
+digest-pinned published 0.4.1 image, which supports both HTTP and native stdio.
 
 For local development from this source checkout:
 
@@ -135,9 +137,8 @@ content-addressed store helpers for embedding in a Deno application.
 
 ## MCP tools
 
-The table below describes the 0.4.1 source/package tool surface. The previously
-published, digest-pinned 0.4.0 image has the same tool surface but only the HTTP
-transport documented above.
+The table below describes the 0.4.1 source/package tool surface and the
+digest-pinned published 0.4.1 image.
 Historical 0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected
 `branch_sources`, and did not return `branch_currents_a`.
 
@@ -445,7 +446,7 @@ deno run --allow-all scripts/gen_fixtures.ts
 ```
 
 Build a local container from this source checkout. That local tag is not the
-digest-pinned published 0.4.0 image:
+digest-pinned published 0.4.1 release-code image:
 
 ```bash
 docker build -t mcp-spice:local .
