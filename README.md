@@ -7,12 +7,10 @@ compact, structured results tied to the exact input bytes.
 [container image](https://github.com/Casys-AI/mcp-spice/pkgs/container/mcp-spice) ·
 [changelog](CHANGELOG.md) · [security policy](SECURITY.md)
 
-**Release status.** Source version `0.5.1` adds `execution-budgets/1.0`; the main
-release gate publishes it to JSR only after native validation. The currently qualified
-multi-architecture GHCR image remains `0.5.0` and is pinned below by digest. Executable
-JSR examples pin `jsr:@casys/mcp-spice@0.5.1`; Docker examples pin their qualified OCI
-index digest. `:latest` is a mutable convenience tag, not the authority for a version
-or capability.
+**Release status.** Version `0.5.1` is published on JSR and as a native-gated,
+multi-architecture GHCR image. Executable JSR examples pin `jsr:@casys/mcp-spice@0.5.1`;
+Docker examples pin the qualified OCI index digest. `:latest` is a mutable convenience
+tag, not the authority for a version or capability.
 
 Historical 0.3.0 context: that release's JSR package and digest-pinned image had package
 version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant `server/discover`
@@ -43,9 +41,9 @@ it does not decide whether a circuit satisfies a requirement.
 
 ## Quick start
 
-### Published 0.5.0 Docker image
+### Published 0.5.1 Docker image
 
-The published multi-architecture 0.5.0 release-code image is pinned below by digest. Its
+The published multi-architecture 0.5.1 release-code image is pinned below by digest. Its
 entrypoint is `./docker-entrypoint.sh` and its `CMD` is `http`; the command below
 therefore starts the stateless HTTP transport. The image contains Deno and the tested
 ngspice 44.2 baseline. The named volume preserves submitted netlists across container
@@ -55,7 +53,7 @@ restarts.
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:96886fe03626f858ac44302d94248c0168159c89816d18f585317b9920259c4e http
+  ghcr.io/casys-ai/mcp-spice@sha256:124fb54f2dd19d26126c7825b85cdcb6b0a352f21cbd8c39d06835e5987dc458 http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. This repository's native HTTP transport
@@ -73,7 +71,7 @@ curl -sS -X POST http://127.0.0.1:3023/mcp \
 For a raw `tools/call` request, also set `Mcp-Name` to the exact tool name in
 `params.name`. Native stdio clients do not use this HTTP transport envelope.
 
-`:latest` is a mutable convenience tag, not the authority for the 0.5.0 contract. Use
+`:latest` is a mutable convenience tag, not the authority for the 0.5.1 contract. Use
 the digest above for a reproducible or production deployment.
 
 ### Native stdio from source or JSR 0.5.1
@@ -95,12 +93,12 @@ deno run --allow-all jsr:@casys/mcp-spice@0.5.1/server --stdio
 
 The JSR module also requires an `ngspice` executable on `PATH`.
 
-The qualified 0.5.0 image also runs native stdio when `stdio` is passed to Docker:
+The qualified 0.5.1 image also runs native stdio when `stdio` is passed to Docker:
 
 ```bash
 docker run --rm -i \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:96886fe03626f858ac44302d94248c0168159c89816d18f585317b9920259c4e stdio
+  ghcr.io/casys-ai/mcp-spice@sha256:124fb54f2dd19d26126c7825b85cdcb6b0a352f21cbd8c39d06835e5987dc458 stdio
 ```
 
 Passing `stdio` overrides the image's `CMD http`; it does not start an HTTP child.
@@ -120,8 +118,7 @@ deno run --allow-all jsr:@casys/mcp-spice@0.5.1/server --port=3023
 ```
 
 The version-pinned JSR command and source checkout are separate from the digest-pinned
-published 0.5.0 image. Until a 0.5.1 image is qualified, do not infer that the 0.5.0
-digest implements the new execution budgets.
+published 0.5.1 image. The shared versioned surface includes `execution-budgets/1.0`.
 
 For local development from this source checkout:
 
@@ -138,10 +135,9 @@ content-addressed store helpers for embedding in a Deno application.
 
 ## MCP tools
 
-The table below describes the 0.5.1 source and JSR surface. The qualified 0.5.0 image is
-the prior release until its successor is built and qualified. Historical 0.3.0 context:
-`spice_simulate_op` required `nodes[]`, rejected `branch_sources`, and did not return
-`branch_currents_a`.
+The table below describes the shared 0.5.1 source, JSR, and qualified image surface.
+Historical 0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected
+`branch_sources`, and did not return `branch_currents_a`.
 
 | Tool                     | Purpose                                       | Required input                                                                                                                                                        | Structured result                                                                                     |
 | ------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -410,8 +406,7 @@ The present source surface stays deliberately bounded. It exposes an operating p
 transient summaries with timestamps and requested branch currents, and a one-dimensional
 DC source sweep reduced to extrema/final summaries. It does not expose AC analysis,
 noise analysis, Monte Carlo, caller-supplied control scripts, or waveform samples. The
-qualified 0.5.0 image exposes the prior bounded surface; a successor image must be
-qualified separately before it can claim 0.5.1 execution-budget parity.
+qualified 0.5.1 image exposes this same bounded analysis surface.
 
 | Area                 | Current behavior                                                                                                            |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -499,7 +494,7 @@ deno run --allow-all scripts/gen_fixtures.ts
 ```
 
 Build a local container from this source checkout. That local tag is not the
-digest-pinned published 0.5.0 release-code image:
+digest-pinned published 0.5.1 release-code image:
 
 ```bash
 docker build -t mcp-spice:local .
