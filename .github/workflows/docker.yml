@@ -2,14 +2,32 @@ name: Docker
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
   workflow_dispatch:
 
 jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Require the release tag to match the package version
+        if: github.event_name == 'push'
+        run: test "${GITHUB_REF_NAME}" = "v$(deno eval 'console.log(JSON.parse(Deno.readTextFileSync("deno.json")).version)')"
+
+      - name: Install tested ngspice baseline
+        run: sudo apt-get update && sudo apt-get install -y ngspice
+
+      - name: Verify source and native release gates
+        run: SPICE_RUN_NATIVE=1 deno task release:check
+
   build-push:
+    needs: qualify
     runs-on: ubuntu-latest
     permissions:
       contents: read
