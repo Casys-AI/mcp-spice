@@ -12,7 +12,7 @@ import { McpApp } from "@casys/mcp-server";
 import { mapSpiceToolError } from "./src/api/tool-error.ts";
 import { SpiceToolsClient } from "./src/client.ts";
 
-const VERSION = "0.5.0";
+const VERSION = "0.5.1";
 const DEFAULT_PORT = 3023;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 
@@ -45,6 +45,9 @@ export function createSpiceServer(
       "voltage and branch-current min/max/final summaries with timestamps. " +
       "spice_simulate_dc runs one bounded voltage-source sweep and returns " +
       "reduced summaries, never a raw transfer curve. " +
+      "Both submitted and legacy-path netlists are limited to 1 MiB; each " +
+      "observable kind is limited to 32 names. Transient wrdata is bounded " +
+      "to 8 MiB and 50,000 samples before reduction. " +
       "The caller supplies the circuit definition only (no .control block). " +
       "The server validates the netlist for forbidden directives, writes the " +
       ".control block, runs ngspice, and returns raw scalar results. " +

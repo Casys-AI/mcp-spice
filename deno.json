@@ -1,13 +1,13 @@
 {
   "name": "@casys/mcp-spice",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "minimumDependencyAge": {
     "age": "P1D",
     "exclude": ["jsr:@casys/mcp-server"]
   },
   "tasks": {
     "serve": "deno run --allow-all server.ts --port=3023",
-    "check": "deno check mod.ts server.ts src/client.ts src/api/ngspice.ts src/api/netlist-artifact.ts src/api/netlist-security.ts src/api/netlist-store.ts src/api/netlist-resolve.ts src/api/tool-error.ts src/tools/types.ts src/tools/mod.ts src/tools/op.ts src/tools/tran.ts src/tools/dc.ts src/tools/submit.ts scripts/gen_fixtures.ts",
+    "check": "deno check mod.ts server.ts src/client.ts src/api/execution-budgets.ts src/api/ngspice.ts src/api/netlist-artifact.ts src/api/netlist-security.ts src/api/netlist-store.ts src/api/netlist-resolve.ts src/api/tool-error.ts src/tools/types.ts src/tools/mod.ts src/tools/op.ts src/tools/tran.ts src/tools/dc.ts src/tools/submit.ts scripts/gen_fixtures.ts",
     "lint": "deno lint",
     "fmt": "deno fmt --check deno.json mod.ts server.ts src tests scripts",
     "release:check": "deno task fmt && deno task check && deno task lint && deno task test",

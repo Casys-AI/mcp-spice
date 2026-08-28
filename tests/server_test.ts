@@ -15,6 +15,7 @@
 
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { NetlistArtifactError } from "../src/api/netlist-artifact.ts";
+import { MAX_OBSERVABLES_PER_KIND } from "../src/api/execution-budgets.ts";
 import {
   NetlistSecurityError,
   SpiceIdentifierError,
@@ -27,6 +28,7 @@ import {
   parseMeasurements,
   parseWrdata,
   parseWrdataSeries,
+  readTransientWrdataWithinLimit,
   SpiceError,
   validateDcObservedSweep,
 } from "../src/api/ngspice.ts";
@@ -277,7 +279,12 @@ Deno.test(
     );
     const properties = input.properties as Record<string, Record<string, unknown>>;
     assertEquals(properties.nodes?.minItems, 1);
+    assertEquals(properties.nodes?.maxItems, MAX_OBSERVABLES_PER_KIND);
     assertEquals(properties.branch_sources?.minItems, 1);
+    assertEquals(
+      properties.branch_sources?.maxItems,
+      MAX_OBSERVABLES_PER_KIND,
+    );
     const anyOf = input.anyOf as Array<{ required: string[] }>;
     assert(
       Array.isArray(anyOf) && anyOf.length >= 2,
@@ -465,26 +472,27 @@ Deno.test(
 );
 
 Deno.test(
-  "spice_simulate_op handler rejects a call with neither nodes nor branch_sources",
+  "spice_simulate_op handler returns a machine-readable error with neither observable",
   async () => {
     const tool = allTools.find((t) => t.name === "spice_simulate_op");
     assert(tool);
-    await assertRejects(
+    const error = await assertRejects(
       async () => {
         await tool.handler({ netlist_sha256: "a".repeat(64) });
       },
-      TypeError,
-      "nodes or branch_sources",
+      SpiceToolError,
     );
+    assertEquals(error.code, "missing_observables");
+    assert(isMachineReadableError(error));
   },
 );
 
 Deno.test(
-  "spice_simulate_op handler rejects empty nodes and empty branch_sources together",
+  "spice_simulate_op handler returns a machine-readable error for empty observables",
   async () => {
     const tool = allTools.find((t) => t.name === "spice_simulate_op");
     assert(tool);
-    await assertRejects(
+    const error = await assertRejects(
       async () => {
         await tool.handler({
           netlist_sha256: "a".repeat(64),
@@ -492,9 +500,45 @@ Deno.test(
           branch_sources: [],
         });
       },
-      TypeError,
-      "nodes or branch_sources",
+      SpiceToolError,
     );
+    assertEquals(error.code, "invalid_nodes");
+    assert(isMachineReadableError(error));
+  },
+);
+
+Deno.test(
+  "spice_simulate_op rejects over-budget observables and invalid timeout before resolving a netlist",
+  async () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_op");
+    assert(tool);
+    const observableError = await assertRejects(
+      async () => {
+        await tool.handler({
+          netlist_sha256: "a".repeat(64),
+          nodes: Array.from(
+            { length: MAX_OBSERVABLES_PER_KIND + 1 },
+            (_, index) => `n${index}`,
+          ),
+        });
+      },
+      SpiceToolError,
+    );
+    assertEquals(observableError.code, "invalid_nodes");
+    assertEquals(observableError.context.maxItems, MAX_OBSERVABLES_PER_KIND);
+
+    const timeoutError = await assertRejects(
+      async () => {
+        await tool.handler({
+          netlist_sha256: "a".repeat(64),
+          nodes: ["out"],
+          timeout_s: 0,
+        });
+      },
+      SpiceToolError,
+    );
+    assertEquals(timeoutError.code, "invalid_timeout_s");
+    assert(isMachineReadableError(timeoutError));
   },
 );
 
@@ -821,6 +865,39 @@ Deno.test(
     );
     assertEquals(error.code, "ngspice_output_invalid");
     assertEquals(error.context.lineNumber, 2);
+  },
+);
+
+Deno.test(
+  "transient wrdata point budget fails closed with a typed output-limit error",
+  () => {
+    const error = assertThrows(
+      () => parseWrdataSeries("0 1\n1 2\n", 1, 1),
+      SpiceError,
+    );
+    assertEquals(error.code, "ngspice_output_limit_exceeded");
+    assertEquals(error.context.limit, "points");
+    assertEquals(error.context.maxPoints, 1);
+  },
+);
+
+Deno.test(
+  "transient wrdata byte budget fails before the file is read",
+  async () => {
+    const directory = await Deno.makeTempDir({ prefix: "spice-wrdata-limit-" });
+    const path = `${directory}/tran_out.dat`;
+    try {
+      await Deno.writeTextFile(path, "0 1\n");
+      const error = await assertRejects(
+        () => readTransientWrdataWithinLimit(path, 3),
+        SpiceError,
+      );
+      assertEquals(error.code, "ngspice_output_limit_exceeded");
+      assertEquals(error.context.limit, "bytes");
+      assertEquals(error.context.maxBytes, 3);
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+    }
   },
 );
 

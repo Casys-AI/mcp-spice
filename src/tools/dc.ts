@@ -10,6 +10,12 @@
 
 import { resolveSimulationNetlist } from "../api/netlist-resolve.ts";
 import {
+  MAX_OBSERVABLES_PER_KIND,
+  MAX_TIMEOUT_SECONDS,
+  MIN_TIMEOUT_SECONDS,
+  timeoutMsFromArgs,
+} from "../api/execution-budgets.ts";
+import {
   validateNetlistSecurity,
   validateNodeName,
   validateSourceName,
@@ -23,7 +29,6 @@ import { SpiceToolError } from "../api/tool-error.ts";
 import type { SpiceTool } from "./types.ts";
 
 const TOOL_NAME = "spice_simulate_dc";
-const MAX_OBSERVABLES_PER_KIND = 32;
 
 const NOT_CHECKED = [
   "This is a single, server-owned DC sweep over one explicitly named independent voltage source; it is not an AC, noise, Monte Carlo, or worst-case analysis.",
@@ -100,6 +105,8 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     },
     timeout_s: {
       type: "number",
+      minimum: MIN_TIMEOUT_SECONDS,
+      maximum: MAX_TIMEOUT_SECONDS,
       description: "Simulation timeout in seconds (default 30, max 300).",
     },
   },
@@ -270,10 +277,7 @@ export const dcTool: SpiceTool = {
     for (const node of nodes) validateNodeName(node, TOOL_NAME);
     for (const source of branchSources) validateSourceName(source, TOOL_NAME);
 
-    const rawTimeout = args["timeout_s"];
-    const timeoutMs = typeof rawTimeout === "number"
-      ? Math.min(Math.max(rawTimeout, 1), 300) * 1000
-      : 30_000;
+    const timeoutMs = timeoutMsFromArgs(args["timeout_s"], TOOL_NAME);
     const snapshot = await resolveSimulationNetlist(TOOL_NAME, args);
 
     try {

@@ -7,10 +7,12 @@ compact, structured results tied to the exact input bytes.
 [container image](https://github.com/Casys-AI/mcp-spice/pkgs/container/mcp-spice) ·
 [changelog](CHANGELOG.md) · [security policy](SECURITY.md)
 
-**Release status.** Version `0.5.0` is published on JSR and as a native-gated,
-multi-architecture GHCR image. Executable JSR examples pin `jsr:@casys/mcp-spice@0.5.0`;
-Docker examples pin the qualified OCI index digest. `:latest` is a mutable convenience
-tag, not the authority for a version or capability.
+**Release status.** Source version `0.5.1` adds `execution-budgets/1.0`; the main
+release gate publishes it to JSR only after native validation. The currently qualified
+multi-architecture GHCR image remains `0.5.0` and is pinned below by digest. Executable
+JSR examples pin `jsr:@casys/mcp-spice@0.5.1`; Docker examples pin their qualified OCI
+index digest. `:latest` is a mutable convenience tag, not the authority for a version
+or capability.
 
 Historical 0.3.0 context: that release's JSR package and digest-pinned image had package
 version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant `server/discover`
@@ -74,9 +76,9 @@ For a raw `tools/call` request, also set `Mcp-Name` to the exact tool name in
 `:latest` is a mutable convenience tag, not the authority for the 0.5.0 contract. Use
 the digest above for a reproducible or production deployment.
 
-### Native stdio from source or JSR 0.5.0
+### Native stdio from source or JSR 0.5.1
 
-The source server and JSR 0.5.0 use the framework-native, era-aware stdio transport
+The source server and JSR 0.5.1 use the framework-native, era-aware stdio transport
 directly. They accept the classic `2025-06-18` initialize handshake and write only
 JSON-RPC messages to stdout. Running from a source checkout still requires ngspice on
 `PATH`:
@@ -88,7 +90,7 @@ deno run --allow-all server.ts --stdio
 The equivalent version-pinned JSR command is:
 
 ```bash
-deno run --allow-all jsr:@casys/mcp-spice@0.5.0/server --stdio
+deno run --allow-all jsr:@casys/mcp-spice@0.5.1/server --stdio
 ```
 
 The JSR module also requires an `ngspice` executable on `PATH`.
@@ -114,11 +116,12 @@ brew install ngspice
 # Debian / Ubuntu
 sudo apt install ngspice
 
-deno run --allow-all jsr:@casys/mcp-spice@0.5.0/server --port=3023
+deno run --allow-all jsr:@casys/mcp-spice@0.5.1/server --port=3023
 ```
 
 The version-pinned JSR command and source checkout are separate from the digest-pinned
-published 0.5.0 image.
+published 0.5.0 image. Until a 0.5.1 image is qualified, do not infer that the 0.5.0
+digest implements the new execution budgets.
 
 For local development from this source checkout:
 
@@ -135,9 +138,10 @@ content-addressed store helpers for embedding in a Deno application.
 
 ## MCP tools
 
-The table below describes the shared 0.5.0 source, JSR, and image surface. Historical
-0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected `branch_sources`, and
-did not return `branch_currents_a`.
+The table below describes the 0.5.1 source and JSR surface. The qualified 0.5.0 image is
+the prior release until its successor is built and qualified. Historical 0.3.0 context:
+`spice_simulate_op` required `nodes[]`, rejected `branch_sources`, and did not return
+`branch_currents_a`.
 
 | Tool                     | Purpose                                       | Required input                                                                                                                                                        | Structured result                                                                                     |
 | ------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -147,7 +151,10 @@ did not return `branch_currents_a`.
 | `spice_simulate_dc`      | Run one bounded DC source sweep               | `netlist_sha256`, `sweep_source`, `start_v`, `stop_v`, `step_v`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path` | `node_stats`, `branch_current_stats_a`, `measurements`, `sweep`, `not_checked`, `input_artifact`      |
 
 Each registered operation is non-destructive, idempotent, and closed-world. Simulation
-calls default to a 30-second timeout; `timeout_s` is clamped to the range 1–300 seconds.
+calls default to a 30-second timeout; `timeout_s` outside 1–300 seconds is refused.
+Both source modes accept at most 1 MiB of netlist bytes. Each `nodes[]` and
+`branch_sources[]` array accepts at most 32 names; transient private `wrdata` is capped
+at 8 MiB and 50,000 samples before reduced statistics are computed.
 
 ## End-to-end content-addressed workflow
 
@@ -176,9 +183,9 @@ Call `ngspice_netlist_submit`. It returns:
 
 Submitting the same bytes again is an idempotent no-op. To assert a precomputed digest,
 add the optional `netlist_sha256` field; a mismatch is refused before any write. The
-submitted-netlist limit is 1 MiB. A forbidden construct, oversized input, or attempt to
-replace different bytes at an existing digest is refused before a mutable object can be
-exposed.
+submitted and legacy-path netlist limit is 1 MiB. A forbidden construct, oversized input,
+or attempt to replace different bytes at an existing digest is refused before a mutable
+object can be exposed.
 
 ### 2. Run the operating point
 
@@ -368,8 +375,8 @@ There are two mutually exclusive input modes:
   process and container boundaries.
 - **Filesystem path, legacy:** pass a path visible inside the server process and the
   SHA-256 of that file. The server copies it to a private read-only snapshot and
-  verifies the snapshot before simulation. Do not combine `netlist_path` with
-  `netlist_uri`.
+  verifies the snapshot before simulation. It has the same 1 MiB limit as submitted
+  netlists. Do not combine `netlist_path` with `netlist_uri`.
 
 The immutable store defaults to `${NGSPICE_RUNS_DIR:-/ngspice-runs}/inputs/<sha256>`.
 Set `SPICE_NETLIST_STORE` to override the exact inputs directory. The server does not
@@ -388,11 +395,11 @@ Every successful tool response has a short text `content` summary and closed
   the analysis boundary rather than infer unsupported coverage.
 - Admission, selector-validation, provenance, and ngspice failures are serialized as
   `{ "code", "context", "recovery" }`. Examples include `netlist_sha256_mismatch`,
-  `netlist_forbidden_directive`, `invalid_node_name`, `ngspice_unavailable`, and
-  `ngspice_dc_grid_invalid`.
+  `netlist_forbidden_directive`, `invalid_node_name`, `ngspice_unavailable`,
+  `ngspice_timeout`, `ngspice_output_limit_exceeded`, and `ngspice_dc_grid_invalid`.
 - ngspice non-zero exits, error/fatal log lines, malformed or divergent `wrdata`,
-  missing output, and absent requested observables fail the tool call instead of
-  returning a partial success.
+  missing output, output-limit breaches, and absent requested observables fail the tool
+  call instead of returning a partial success.
 
 The digest proves which bytes this process consumed. It does not, by itself, turn a
 numerical result into a requirement verdict or a qualified engineering claim.
@@ -403,7 +410,8 @@ The present source surface stays deliberately bounded. It exposes an operating p
 transient summaries with timestamps and requested branch currents, and a one-dimensional
 DC source sweep reduced to extrema/final summaries. It does not expose AC analysis,
 noise analysis, Monte Carlo, caller-supplied control scripts, or waveform samples. The
-qualified 0.5.0 image exposes this same bounded analysis surface.
+qualified 0.5.0 image exposes the prior bounded surface; a successor image must be
+qualified separately before it can claim 0.5.1 execution-budget parity.
 
 | Area                 | Current behavior                                                                                                            |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |

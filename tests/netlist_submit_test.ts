@@ -6,12 +6,13 @@
  */
 
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import { sha256Hex } from "../src/api/netlist-artifact.ts";
+import { NetlistArtifactError, sha256Hex } from "../src/api/netlist-artifact.ts";
 import { resolveSimulationNetlist } from "../src/api/netlist-resolve.ts";
 import { NetlistSecurityError } from "../src/api/netlist-security.ts";
 import {
   configureNetlistStoreDir,
   getNetlistPath,
+  NETLIST_MAX_BYTES,
   putNetlistBytes,
 } from "../src/api/netlist-store.ts";
 import { isMachineReadableError, SpiceToolError } from "../src/api/tool-error.ts";
@@ -232,6 +233,50 @@ Deno.test(
         await fromPath.cleanup();
         await fromHash.cleanup();
       }
+    });
+  },
+);
+
+Deno.test(
+  "legacy netlist_path refuses the same byte budget as ngspice_netlist_submit",
+  async () => {
+    const directory = await Deno.makeTempDir({ prefix: "spice-legacy-limit-" });
+    const path = `${directory}/oversized.cir`;
+    try {
+      const bytes = new Uint8Array(NETLIST_MAX_BYTES + 1);
+      bytes.fill(0x20);
+      await Deno.writeFile(path, bytes);
+      const sha256 = await sha256Hex(bytes);
+      const error = await assertRejects(
+        () =>
+          resolveSimulationNetlist("spice_simulate_op", {
+            netlist_path: path,
+            netlist_sha256: sha256,
+          }),
+        NetlistArtifactError,
+      );
+      assertEquals(error.code, "netlist_too_large");
+      assertEquals(error.context.byteCount, NETLIST_MAX_BYTES + 1);
+      assertEquals(error.context.maxBytes, NETLIST_MAX_BYTES);
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+    }
+  },
+);
+
+Deno.test(
+  "ngspice_netlist_submit refuses the shared byte budget before store write",
+  async () => {
+    await withStore(async (dir) => {
+      const oversized = " ".repeat(NETLIST_MAX_BYTES + 1);
+      const error = await assertRejects(
+        () => submit(oversized),
+        SpiceToolError,
+      );
+      assertEquals(error.code, "netlist_too_large");
+      assertEquals(error.context.byteCount, NETLIST_MAX_BYTES + 1);
+      assertEquals(error.context.maxBytes, NETLIST_MAX_BYTES);
+      assertEquals(storedHashes(dir), []);
     });
   },
 );

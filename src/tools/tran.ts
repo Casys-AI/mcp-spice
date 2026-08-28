@@ -15,6 +15,12 @@
 
 import { resolveSimulationNetlist } from "../api/netlist-resolve.ts";
 import {
+  MAX_OBSERVABLES_PER_KIND,
+  MAX_TIMEOUT_SECONDS,
+  MIN_TIMEOUT_SECONDS,
+  timeoutMsFromArgs,
+} from "../api/execution-budgets.ts";
+import {
   validateNetlistSecurity,
   validateNodeName,
   validateSourceName,
@@ -34,8 +40,6 @@ const NOT_CHECKED = [
   "Branch currents are extracted only for voltage sources explicitly named in branch_sources; raw ngspice i(Vsource) is positive into the source positive terminal.",
   "For min/max ties, the earliest sampled time is returned. The complete time series is never returned; only reduced statistics are returned.",
 ];
-
-const MAX_OBSERVABLES_PER_KIND = 32;
 
 const INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -96,6 +100,8 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     },
     timeout_s: {
       type: "number",
+      minimum: MIN_TIMEOUT_SECONDS,
+      maximum: MAX_TIMEOUT_SECONDS,
       description: "Simulation timeout in seconds (default 30, max 300).",
     },
   },
@@ -272,10 +278,7 @@ export const tranTool: SpiceTool = {
     for (const node of nodes) validateNodeName(node, TOOL_NAME);
     for (const source of branchSources) validateSourceName(source, TOOL_NAME);
 
-    const rawTimeout = args["timeout_s"];
-    const timeoutMs = typeof rawTimeout === "number"
-      ? Math.min(Math.max(rawTimeout, 1), 300) * 1000
-      : 30_000;
+    const timeoutMs = timeoutMsFromArgs(args["timeout_s"], TOOL_NAME);
 
     // 1. Snapshot from path (legacy) or content-addressed store (submit).
     const snapshot = await resolveSimulationNetlist(TOOL_NAME, args);

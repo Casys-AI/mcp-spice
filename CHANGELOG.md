@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-08-28
+
+### Changed
+
+- `execution-budgets/1.0` makes the 1 MiB netlist limit identical for
+  `ngspice_netlist_submit` and legacy `netlist_path` snapshots. All three
+  simulations now reject, rather than clamp, `timeout_s` outside 1–300 seconds;
+  each node/current observable array is capped at 32 entries.
+- Transient `wrdata` is refused before parsing above 8 MiB or 50,000 samples.
+  The raw waveform remains private and reduced statistics remain the only
+  transient result surface.
+
+### Fixed
+
+- Operating-point argument failures now use the standard machine-readable
+  `{ code, context, recovery }` envelope instead of raw `TypeError` messages.
+- Timeout and output-budget breaches are typed as `ngspice_timeout` and
+  `ngspice_output_limit_exceeded`, respectively.
+
 ## [0.5.0] - 2026-08-28
 
 ### Added

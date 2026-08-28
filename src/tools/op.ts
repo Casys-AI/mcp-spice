@@ -17,11 +17,18 @@
 
 import { resolveSimulationNetlist } from "../api/netlist-resolve.ts";
 import {
+  MAX_OBSERVABLES_PER_KIND,
+  MAX_TIMEOUT_SECONDS,
+  MIN_TIMEOUT_SECONDS,
+  timeoutMsFromArgs,
+} from "../api/execution-budgets.ts";
+import {
   validateNetlistSecurity,
   validateNodeName,
   validateSourceName,
 } from "../api/netlist-security.ts";
 import { runNgspiceOp } from "../api/ngspice.ts";
+import { SpiceToolError } from "../api/tool-error.ts";
 import type { SpiceTool } from "./types.ts";
 
 const TOOL_NAME = "spice_simulate_op";
@@ -69,6 +76,7 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     nodes: {
       type: "array",
       minItems: 1,
+      maxItems: MAX_OBSERVABLES_PER_KIND,
       items: { type: "string" },
       description:
         'Node names whose DC voltages are requested (e.g. ["out", "vdd"]). ' +
@@ -78,6 +86,7 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     branch_sources: {
       type: "array",
       minItems: 1,
+      maxItems: MAX_OBSERVABLES_PER_KIND,
       items: { type: "string" },
       description:
         'Voltage-source names whose DC branch currents are requested (e.g. ["Vin"]). ' +
@@ -88,6 +97,8 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     },
     timeout_s: {
       type: "number",
+      minimum: MIN_TIMEOUT_SECONDS,
+      maximum: MAX_TIMEOUT_SECONDS,
       description: "Simulation timeout in seconds (default 30, max 300).",
     },
   },
@@ -160,15 +171,22 @@ function readNameList(
   itemLabel: string,
 ): string[] {
   if (raw === undefined || raw === null) return [];
-  if (!Array.isArray(raw)) {
-    throw new TypeError(
-      `[${TOOL_NAME}] ${field} must be an array of ${itemLabel} names.`,
+  if (
+    !Array.isArray(raw) || raw.length === 0 ||
+    raw.length > MAX_OBSERVABLES_PER_KIND
+  ) {
+    throw new SpiceToolError(
+      `invalid_${field}`,
+      { toolName: TOOL_NAME, [field]: raw, maxItems: MAX_OBSERVABLES_PER_KIND },
+      `Pass ${field} as a non-empty array of at most ${MAX_OBSERVABLES_PER_KIND} ${itemLabel} names.`,
     );
   }
   return raw.map((item) => {
     if (typeof item !== "string") {
-      throw new TypeError(
-        `[${TOOL_NAME}] Each ${itemLabel} name must be a string.`,
+      throw new SpiceToolError(
+        `invalid_${field}`,
+        { toolName: TOOL_NAME, [field]: raw },
+        `Pass ${field} as an array of ${itemLabel} name strings.`,
       );
     }
     return item;
@@ -205,18 +223,16 @@ export const opTool: SpiceTool = {
       "source",
     );
     if (nodes.length === 0 && branchSources.length === 0) {
-      throw new TypeError(
-        `[${TOOL_NAME}] At least one of nodes or branch_sources must be a ` +
-          "non-empty array.",
+      throw new SpiceToolError(
+        "missing_observables",
+        { toolName: TOOL_NAME },
+        "Pass at least one node in nodes or voltage-source name in branch_sources.",
       );
     }
     for (const n of nodes) validateNodeName(n, TOOL_NAME);
     for (const s of branchSources) validateSourceName(s, TOOL_NAME);
 
-    const rawTimeout = args["timeout_s"];
-    const timeoutMs = typeof rawTimeout === "number"
-      ? Math.min(Math.max(rawTimeout, 1), 300) * 1000
-      : 30_000;
+    const timeoutMs = timeoutMsFromArgs(args["timeout_s"], TOOL_NAME);
 
     // 1. Snapshot from path (legacy) or content-addressed store (submit).
     const snapshot = await resolveSimulationNetlist(TOOL_NAME, args);

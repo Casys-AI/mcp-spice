@@ -16,11 +16,11 @@
  */
 
 import { join } from "@std/path";
+import { NETLIST_MAX_BYTES } from "./execution-budgets.ts";
 import { sha256Hex } from "./netlist-artifact.ts";
 import { SpiceToolError } from "./tool-error.ts";
 
-/** Default cap: a circuit-only netlist has no reason to exceed 1 MiB. */
-export const NETLIST_MAX_BYTES = 1_048_576;
+export { NETLIST_MAX_BYTES } from "./execution-budgets.ts";
 
 const SHA256_RE = /^[a-fA-F0-9]{64}$/;
 const URI_RE = /^spice-netlist:sha256:([a-fA-F0-9]{64})$/;

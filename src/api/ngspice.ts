@@ -25,6 +25,11 @@
  *     col 2i+1 = v(nodes[i]) value at that time step
  */
 
+import {
+  DEFAULT_TIMEOUT_MS,
+  MAX_TRANSIENT_POINTS,
+  MAX_TRANSIENT_WRDATA_BYTES,
+} from "./execution-budgets.ts";
 import { validateNodeName, validateSourceName } from "./netlist-security.ts";
 import type { MachineReadableErrorFields } from "./tool-error.ts";
 
@@ -157,8 +162,6 @@ export interface DcResult {
   logTail: string;
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000;
-
 /** Hard cap on an internal DC sweep before its reduced result is returned. */
 export const MAX_DC_SWEEP_POINTS = 512;
 
@@ -190,7 +193,8 @@ function assembleNetlist(circuitContent: string, controlBlock: string): string {
 /**
  * Write `netlist` to a temp file, run `ngspice -b`, return stdout+stderr.
  *
- * Cleans up the temp directory in both success and error paths.
+ * Cleans up the temp directory on errors; the successful caller releases it
+ * after parsing the relevant output.
  */
 async function runNgspiceRaw(
   netlist: string,
@@ -198,8 +202,21 @@ async function runNgspiceRaw(
 ): Promise<{ log: string; workDir: string }> {
   const workDir = await Deno.makeTempDir({ prefix: "spice-run-" });
   const cirPath = `${workDir}/circuit.cir`;
-  await Deno.writeTextFile(cirPath, netlist);
+  try {
+    await Deno.writeTextFile(cirPath, netlist);
+    const log = await runNgspiceBatch(cirPath, timeoutMs);
+    return { log, workDir };
+  } catch (error) {
+    await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    throw error;
+  }
+}
 
+/** Run one provider-owned batch process with a typed wall-clock timeout. */
+async function runNgspiceBatch(
+  cirPath: string,
+  timeoutMs: number,
+): Promise<string> {
   let child;
   try {
     child = new Deno.Command("ngspice", {
@@ -207,13 +224,14 @@ async function runNgspiceRaw(
       stdout: "piped",
       stderr: "piped",
     }).spawn();
-  } catch (e) {
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
-    if (e instanceof Deno.errors.NotFound) throw new NgspiceNotFoundError();
-    throw e;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) throw new NgspiceNotFoundError();
+    throw error;
   }
 
+  let timedOut = false;
   const timer = setTimeout(() => {
+    timedOut = true;
     try {
       child.kill("SIGKILL");
     } catch {
@@ -221,17 +239,23 @@ async function runNgspiceRaw(
     }
   }, timeoutMs);
 
-  const { success, stdout, stderr } = await child.output();
-  clearTimeout(timer);
+  const result = await child.output().finally(() => clearTimeout(timer));
 
-  const log = new TextDecoder().decode(stdout) +
-    new TextDecoder().decode(stderr);
+  const log = new TextDecoder().decode(result.stdout) +
+    new TextDecoder().decode(result.stderr);
 
-  if (!success) {
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
+  if (!result.success) {
     throw new SpiceError(
-      `ngspice failed (non-zero exit or killed after ${timeoutMs} ms): ` +
-        log.slice(-800),
+      timedOut
+        ? `ngspice exceeded the ${timeoutMs} ms execution budget: ${log.slice(-800)}`
+        : `ngspice exited with a non-zero status: ${log.slice(-800)}`,
+      {
+        code: timedOut ? "ngspice_timeout" : "ngspice_process_failed",
+        context: { timeoutMs },
+        recovery: timedOut
+          ? "Reduce circuit complexity or request fewer observables, then retry within the fixed timeout budget."
+          : "Check the circuit and requested observables, then retry. Do not infer a result from a failed ngspice run.",
+      },
     );
   }
 
@@ -250,14 +274,19 @@ async function runNgspiceRaw(
           l.toLowerCase().includes("fatal:"),
       )
       .join("\n");
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
     throw new SpiceError(
       "ngspice reported an error (exit 0 but error in log): " +
         (errorLines || log.slice(-800)),
+      {
+        code: "ngspice_reported_error",
+        context: { stage: "ngspice_log" },
+        recovery:
+          "Check the circuit and requested observables, then retry. Do not infer a result from a failed ngspice run.",
+      },
     );
   }
 
-  return { log, workDir };
+  return log;
 }
 
 // ---------------------------------------------------------------------------
@@ -430,80 +459,19 @@ export async function runNgspiceTran(
     `.control\ntran ${tstepStr} ${tstopStr}\nwrdata ${wrdataPath} ${printArgs}\nquit\n.endc`;
   const netlist = assembleNetlist(circuitContent, controlBlock);
 
-  await Deno.writeTextFile(cirPath, netlist);
-
-  let child;
   try {
-    child = new Deno.Command("ngspice", {
-      args: ["-b", cirPath],
-      stdout: "piped",
-      stderr: "piped",
-    }).spawn();
-  } catch (e) {
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
-    if (e instanceof Deno.errors.NotFound) throw new NgspiceNotFoundError();
-    throw e;
-  }
-
-  const timerT = setTimeout(() => {
-    try {
-      child.kill("SIGKILL");
-    } catch { /* already exited */ }
-  }, timeoutMs);
-
-  const { success, stdout, stderr } = await child.output();
-  clearTimeout(timerT);
-
-  const log = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
-
-  if (!success) {
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
-    throw new SpiceError(
-      `ngspice failed (non-zero exit or killed after ${timeoutMs} ms): ` +
-        log.slice(-800),
-    );
-  }
-
-  const lowerLogT = log.toLowerCase();
-  if (
-    lowerLogT.includes("error:") ||
-    lowerLogT.includes("fatal:") ||
-    lowerLogT.includes("aborted")
-  ) {
-    const errorLines = log
-      .split("\n")
-      .filter(
-        (l) =>
-          l.toLowerCase().includes("error:") ||
-          l.toLowerCase().includes("fatal:"),
-      )
-      .join("\n");
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
-    throw new SpiceError(
-      "ngspice reported an error (exit 0 but error in log): " +
-        (errorLines || log.slice(-800)),
-    );
-  }
-
-  try {
+    await Deno.writeTextFile(cirPath, netlist);
+    const log = await runNgspiceBatch(cirPath, timeoutMs);
     const logTail = log.slice(-800);
 
     // LESSON: exit 0 does not guarantee wrdata was written (e.g. convergence
     // failure may produce empty output without a detectable error in the log).
-    let wrdataContent: string;
-    try {
-      wrdataContent = await Deno.readTextFile(wrdataPath);
-    } catch {
-      throw new SpiceError(
-        "[spice_simulate_tran] ngspice finished but wrote no wrdata file. " +
-          "The circuit may have failed to converge. " +
-          `Log tail: ${logTail}`,
-      );
-    }
+    const wrdataContent = await readTransientWrdataWithinLimit(wrdataPath);
 
     const { seriesStats, nPoints } = parseWrdataSeries(
       wrdataContent,
       nodes.length + branchSources.length,
+      MAX_TRANSIENT_POINTS,
     );
     const nodeStats: Record<string, NodeStats> = {};
     const branchCurrentStats: Record<string, BranchCurrentStats> = {};
@@ -741,59 +709,9 @@ export async function runNgspiceDc(
     `wrdata ${wrdataPath} ${printArgs}\nquit\n.endc`;
   const netlist = assembleNetlist(circuitContent, controlBlock);
 
-  await Deno.writeTextFile(cirPath, netlist);
-  let child;
   try {
-    child = new Deno.Command("ngspice", {
-      args: ["-b", cirPath],
-      stdout: "piped",
-      stderr: "piped",
-    }).spawn();
-  } catch (error) {
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
-    if (error instanceof Deno.errors.NotFound) throw new NgspiceNotFoundError();
-    throw error;
-  }
-
-  const timer = setTimeout(() => {
-    try {
-      child.kill("SIGKILL");
-    } catch { /* already exited */ }
-  }, timeoutMs);
-  const { success, stdout, stderr } = await child.output();
-  clearTimeout(timer);
-  const log = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
-
-  if (!success) {
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
-    throw new SpiceError(
-      `ngspice failed (non-zero exit or killed after ${timeoutMs} ms): ` +
-        log.slice(-800),
-    );
-  }
-
-  const lowerLog = log.toLowerCase();
-  if (
-    lowerLog.includes("error:") ||
-    lowerLog.includes("fatal:") ||
-    lowerLog.includes("aborted")
-  ) {
-    const errorLines = log
-      .split("\n")
-      .filter(
-        (line) =>
-          line.toLowerCase().includes("error:") ||
-          line.toLowerCase().includes("fatal:"),
-      )
-      .join("\n");
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
-    throw new SpiceError(
-      "ngspice reported an error (exit 0 but error in log): " +
-        (errorLines || log.slice(-800)),
-    );
-  }
-
-  try {
+    await Deno.writeTextFile(cirPath, netlist);
+    const log = await runNgspiceBatch(cirPath, timeoutMs);
     const logTail = log.slice(-800);
     let wrdataContent: string;
     try {
@@ -824,6 +742,62 @@ export async function runNgspiceDc(
   } finally {
     await Deno.remove(workDir, { recursive: true }).catch(() => {});
   }
+}
+
+/**
+ * Read a transient `wrdata` file only after validating its provider-owned
+ * byte budget. The 8 MiB ceiling keeps the reduced-statistics parser bounded;
+ * callers never receive the raw time series.
+ *
+ * Exported from this source module for deterministic boundary tests; not
+ * root-exported.
+ */
+export async function readTransientWrdataWithinLimit(
+  path: string,
+  maxBytes: number = MAX_TRANSIENT_WRDATA_BYTES,
+): Promise<string> {
+  let info: Deno.FileInfo;
+  try {
+    info = await Deno.stat(path);
+  } catch {
+    throw new SpiceError(
+      "ngspice finished but wrote no transient wrdata file. The circuit may have failed to converge.",
+      {
+        code: "ngspice_output_missing",
+        context: { stage: "wrdata" },
+        recovery:
+          "Check circuit convergence and retry. No partial transient result was returned.",
+      },
+    );
+  }
+  if (!info.isFile) {
+    throw new SpiceError(
+      "ngspice transient wrdata output is not a regular file.",
+      {
+        code: "ngspice_output_invalid",
+        context: { stage: "wrdata", reason: "not_regular_file" },
+        recovery:
+          "Check the circuit and ngspice output, then retry. No partial transient result was returned.",
+      },
+    );
+  }
+  if (info.size > maxBytes) {
+    throw new SpiceError(
+      `ngspice transient wrdata exceeded the ${maxBytes}-byte output budget.`,
+      {
+        code: "ngspice_output_limit_exceeded",
+        context: {
+          stage: "wrdata",
+          limit: "bytes",
+          byteCount: info.size,
+          maxBytes,
+        },
+        recovery:
+          "Reduce transient duration or requested observables, then retry. No partial transient result was returned.",
+      },
+    );
+  }
+  return await Deno.readTextFile(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -935,9 +909,16 @@ function malformedWrdataError(
 function parseWrdataSeriesWithAxis(
   content: string,
   observableCount: number,
+  maxPoints?: number,
 ): ParsedWrdataSeries {
   if (!Number.isSafeInteger(observableCount) || observableCount < 1) {
     throw new TypeError("observableCount must be a positive integer.");
+  }
+  if (
+    maxPoints !== undefined &&
+    (!Number.isSafeInteger(maxPoints) || maxPoints < 1)
+  ) {
+    throw new TypeError("maxPoints must be a positive integer when supplied.");
   }
 
   const expectedCols = 2 * observableCount;
@@ -948,6 +929,23 @@ function parseWrdataSeriesWithAxis(
   for (const [index, rawLine] of content.split("\n").entries()) {
     const line = rawLine.trim();
     if (!line) continue;
+
+    if (maxPoints !== undefined && nPoints >= maxPoints) {
+      throw new SpiceError(
+        `ngspice transient wrdata exceeded the ${maxPoints}-point output budget.`,
+        {
+          code: "ngspice_output_limit_exceeded",
+          context: {
+            stage: "wrdata",
+            limit: "points",
+            pointCount: nPoints + 1,
+            maxPoints,
+          },
+          recovery:
+            "Reduce transient duration or requested observables, then retry. No partial transient result was returned.",
+        },
+      );
+    }
 
     // The server directs ngspice `wrdata` to a dedicated temp file. Its batch
     // format has no header, so a non-blank row is data. Refusing every malformed
@@ -1040,10 +1038,12 @@ function parseWrdataSeriesWithAxis(
 export function parseWrdataSeries(
   content: string,
   observableCount: number,
+  maxPoints?: number,
 ): { seriesStats: WrdataSeriesStats[]; nPoints: number } {
   const { seriesStats, nPoints } = parseWrdataSeriesWithAxis(
     content,
     observableCount,
+    maxPoints,
   );
   return { seriesStats, nPoints };
 }
