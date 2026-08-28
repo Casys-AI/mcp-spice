@@ -13,8 +13,20 @@ export const NETLIST_MAX_BYTES = 1_048_576;
 /** Maximum requested nodes or voltage-source currents per analysis. */
 export const MAX_OBSERVABLES_PER_KIND = 32;
 
-/** Maximum private transient wrdata file bytes read by the provider. */
-export const MAX_TRANSIENT_WRDATA_BYTES = 8 * 1_048_576;
+/**
+ * Maximum private `wrdata` bytes read by the provider for either transient or
+ * DC analysis. Callers receive only reduced statistics, never this file.
+ */
+export const MAX_WRDATA_BYTES = 8 * 1_048_576;
+
+/**
+ * Compatibility alias for consumers that imported the transient-specific name
+ * before DC adopted the same private output budget.
+ */
+export const MAX_TRANSIENT_WRDATA_BYTES = MAX_WRDATA_BYTES;
+
+/** Maximum ngspice stdout or stderr bytes captured before parsing diagnostics. */
+export const MAX_NGSPICE_LOG_BYTES = 1_048_576;
 
 /** Maximum reduced transient samples parsed by the provider. */
 export const MAX_TRANSIENT_POINTS = 50_000;

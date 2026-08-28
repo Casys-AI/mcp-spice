@@ -27,8 +27,9 @@
 
 import {
   DEFAULT_TIMEOUT_MS,
+  MAX_NGSPICE_LOG_BYTES,
   MAX_TRANSIENT_POINTS,
-  MAX_TRANSIENT_WRDATA_BYTES,
+  MAX_WRDATA_BYTES,
 } from "./execution-budgets.ts";
 import { validateNodeName, validateSourceName } from "./netlist-security.ts";
 import type { MachineReadableErrorFields } from "./tool-error.ts";
@@ -217,7 +218,7 @@ async function runNgspiceBatch(
   cirPath: string,
   timeoutMs: number,
 ): Promise<string> {
-  let child;
+  let child: Deno.ChildProcess;
   try {
     child = new Deno.Command("ngspice", {
       args: ["-b", cirPath],
@@ -239,10 +240,49 @@ async function runNgspiceBatch(
     }
   }, timeoutMs);
 
-  const result = await child.output().finally(() => clearTimeout(timer));
+  // Read both pipes concurrently: waiting for one before the other can block a
+  // subprocess that fills the unread pipe.  `ChildProcess.output()` buffers
+  // both streams without a ceiling, so it cannot be used on an OP path.
+  const statusPromise = child.status;
+  const stdoutPromise = readNgspiceOutputWithinLimit(child.stdout, "stdout", () => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already exited */
+    }
+  });
+  const stderrPromise = readNgspiceOutputWithinLimit(child.stderr, "stderr", () => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already exited */
+    }
+  });
+  const [statusResult, stdoutResult, stderrResult] = await Promise.allSettled([
+    statusPromise,
+    stdoutPromise,
+    stderrPromise,
+  ]).finally(() => clearTimeout(timer));
 
-  const log = new TextDecoder().decode(result.stdout) +
-    new TextDecoder().decode(result.stderr);
+  // Preserve the explicit output-limit diagnosis over the killed process's
+  // expected non-zero exit. This applies to OP diagnostics as well as the
+  // transient and DC paths that subsequently read private wrdata files.
+  for (const outputResult of [stdoutResult, stderrResult]) {
+    if (
+      outputResult.status === "rejected" &&
+      outputResult.reason instanceof SpiceError &&
+      outputResult.reason.code === "ngspice_output_limit_exceeded"
+    ) {
+      throw outputResult.reason;
+    }
+  }
+  if (stdoutResult.status === "rejected") throw stdoutResult.reason;
+  if (stderrResult.status === "rejected") throw stderrResult.reason;
+  if (statusResult.status === "rejected") throw statusResult.reason;
+
+  const result = statusResult.value;
+  const log = new TextDecoder().decode(stdoutResult.value) +
+    new TextDecoder().decode(stderrResult.value);
 
   if (!result.success) {
     throw new SpiceError(
@@ -287,6 +327,60 @@ async function runNgspiceBatch(
   }
 
   return log;
+}
+
+/**
+ * Consume one ngspice diagnostic stream under a fixed byte limit. Exported
+ * from this source module for adversarial parser-boundary tests; not
+ * root-exported.
+ */
+export async function readNgspiceOutputWithinLimit(
+  stream: ReadableStream<Uint8Array>,
+  streamName: "stdout" | "stderr",
+  onLimitExceeded: () => void = () => {},
+  maxBytes: number = MAX_NGSPICE_LOG_BYTES,
+): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteCount = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === undefined) continue;
+      byteCount += value.byteLength;
+      if (byteCount > maxBytes) {
+        onLimitExceeded();
+        await reader.cancel().catch(() => {});
+        throw new SpiceError(
+          `ngspice ${streamName} exceeded the ${maxBytes}-byte output budget.`,
+          {
+            code: "ngspice_output_limit_exceeded",
+            context: {
+              stage: "ngspice_log",
+              stream: streamName,
+              limit: "bytes",
+              byteCount,
+              maxBytes,
+            },
+            recovery:
+              "Reduce circuit complexity or requested observables, then retry. No partial simulation result was returned.",
+          },
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const output = new Uint8Array(byteCount);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
 }
 
 // ---------------------------------------------------------------------------
@@ -713,18 +807,9 @@ export async function runNgspiceDc(
     await Deno.writeTextFile(cirPath, netlist);
     const log = await runNgspiceBatch(cirPath, timeoutMs);
     const logTail = log.slice(-800);
-    let wrdataContent: string;
-    try {
-      wrdataContent = await Deno.readTextFile(wrdataPath);
-    } catch {
-      throw new SpiceError(
-        "[spice_simulate_dc] ngspice finished but wrote no wrdata file. " +
-          "The circuit may have failed to converge. " +
-          `Log tail: ${logTail}`,
-      );
-    }
+    const wrdataContent = await readDcWrdataWithinLimit(wrdataPath);
 
-    const { seriesStats, nPoints, axisPositions } = parseWrdataSeriesWithAxis(
+    const { seriesStats, nPoints, axisPositions } = parseDcWrdataSeries(
       wrdataContent,
       nodes.length + branchSources.length,
     );
@@ -745,59 +830,96 @@ export async function runNgspiceDc(
 }
 
 /**
- * Read a transient `wrdata` file only after validating its provider-owned
- * byte budget. The 8 MiB ceiling keeps the reduced-statistics parser bounded;
- * callers never receive the raw time series.
+ * Read a provider-owned `wrdata` file only after validating its byte budget.
+ * The shared ceiling applies before a DC or transient file is decoded; callers
+ * never receive the raw series.
+ */
+type WrdataAnalysis = "transient" | "dc";
+
+function wrdataStage(analysis: WrdataAnalysis): "wrdata" | "dc_wrdata" {
+  return analysis === "dc" ? "dc_wrdata" : "wrdata";
+}
+
+function wrdataLabel(analysis: WrdataAnalysis): string {
+  return analysis === "dc" ? "DC" : "transient";
+}
+
+function wrdataRecovery(analysis: WrdataAnalysis): string {
+  return analysis === "dc"
+    ? "Reduce the DC sweep span, step count, or requested observables, then retry. No partial DC result was returned."
+    : "Reduce transient duration or requested observables, then retry. No partial transient result was returned.";
+}
+
+async function readWrdataWithinLimit(
+  path: string,
+  analysis: WrdataAnalysis,
+  maxBytes: number = MAX_WRDATA_BYTES,
+): Promise<string> {
+  const stage = wrdataStage(analysis);
+  const label = wrdataLabel(analysis);
+  const recovery = wrdataRecovery(analysis);
+  let info: Deno.FileInfo;
+  try {
+    info = await Deno.stat(path);
+  } catch {
+    throw new SpiceError(
+      `ngspice finished but wrote no ${label} wrdata file. The circuit may have failed to converge.`,
+      {
+        code: "ngspice_output_missing",
+        context: { stage },
+        recovery:
+          "Check circuit convergence and retry. No partial simulation result was returned.",
+      },
+    );
+  }
+  if (!info.isFile) {
+    throw new SpiceError(
+      `ngspice ${label} wrdata output is not a regular file.`,
+      {
+        code: "ngspice_output_invalid",
+        context: { stage, reason: "not_regular_file" },
+        recovery:
+          "Check the circuit and ngspice output, then retry. No partial simulation result was returned.",
+      },
+    );
+  }
+  if (info.size > maxBytes) {
+    throw new SpiceError(
+      `ngspice ${label} wrdata exceeded the ${maxBytes}-byte output budget.`,
+      {
+        code: "ngspice_output_limit_exceeded",
+        context: {
+          stage,
+          limit: "bytes",
+          byteCount: info.size,
+          maxBytes,
+        },
+        recovery,
+      },
+    );
+  }
+  return await Deno.readTextFile(path);
+}
+
+/**
+ * Read transient `wrdata` within the shared private-output byte budget.
  *
  * Exported from this source module for deterministic boundary tests; not
  * root-exported.
  */
 export async function readTransientWrdataWithinLimit(
   path: string,
-  maxBytes: number = MAX_TRANSIENT_WRDATA_BYTES,
+  maxBytes: number = MAX_WRDATA_BYTES,
 ): Promise<string> {
-  let info: Deno.FileInfo;
-  try {
-    info = await Deno.stat(path);
-  } catch {
-    throw new SpiceError(
-      "ngspice finished but wrote no transient wrdata file. The circuit may have failed to converge.",
-      {
-        code: "ngspice_output_missing",
-        context: { stage: "wrdata" },
-        recovery:
-          "Check circuit convergence and retry. No partial transient result was returned.",
-      },
-    );
-  }
-  if (!info.isFile) {
-    throw new SpiceError(
-      "ngspice transient wrdata output is not a regular file.",
-      {
-        code: "ngspice_output_invalid",
-        context: { stage: "wrdata", reason: "not_regular_file" },
-        recovery:
-          "Check the circuit and ngspice output, then retry. No partial transient result was returned.",
-      },
-    );
-  }
-  if (info.size > maxBytes) {
-    throw new SpiceError(
-      `ngspice transient wrdata exceeded the ${maxBytes}-byte output budget.`,
-      {
-        code: "ngspice_output_limit_exceeded",
-        context: {
-          stage: "wrdata",
-          limit: "bytes",
-          byteCount: info.size,
-          maxBytes,
-        },
-        recovery:
-          "Reduce transient duration or requested observables, then retry. No partial transient result was returned.",
-      },
-    );
-  }
-  return await Deno.readTextFile(path);
+  return await readWrdataWithinLimit(path, "transient", maxBytes);
+}
+
+/** Read DC `wrdata` within the same private-output byte budget. */
+export async function readDcWrdataWithinLimit(
+  path: string,
+  maxBytes: number = MAX_WRDATA_BYTES,
+): Promise<string> {
+  return await readWrdataWithinLimit(path, "dc", maxBytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -910,6 +1032,7 @@ function parseWrdataSeriesWithAxis(
   content: string,
   observableCount: number,
   maxPoints?: number,
+  analysis: WrdataAnalysis = "transient",
 ): ParsedWrdataSeries {
   if (!Number.isSafeInteger(observableCount) || observableCount < 1) {
     throw new TypeError("observableCount must be a positive integer.");
@@ -932,17 +1055,18 @@ function parseWrdataSeriesWithAxis(
 
     if (maxPoints !== undefined && nPoints >= maxPoints) {
       throw new SpiceError(
-        `ngspice transient wrdata exceeded the ${maxPoints}-point output budget.`,
+        `ngspice ${
+          wrdataLabel(analysis)
+        } wrdata exceeded the ${maxPoints}-point output budget.`,
         {
           code: "ngspice_output_limit_exceeded",
           context: {
-            stage: "wrdata",
+            stage: wrdataStage(analysis),
             limit: "points",
             pointCount: nPoints + 1,
             maxPoints,
           },
-          recovery:
-            "Reduce transient duration or requested observables, then retry. No partial transient result was returned.",
+          recovery: wrdataRecovery(analysis),
         },
       );
     }
@@ -1046,6 +1170,22 @@ export function parseWrdataSeries(
     maxPoints,
   );
   return { seriesStats, nPoints };
+}
+
+/**
+ * Parse a DC wrdata file under the server's hard sweep-point limit. Exported
+ * from this source module for adversarial boundary tests; not root-exported.
+ */
+export function parseDcWrdataSeries(
+  content: string,
+  observableCount: number,
+): ParsedWrdataSeries {
+  return parseWrdataSeriesWithAxis(
+    content,
+    observableCount,
+    MAX_DC_SWEEP_POINTS,
+    "dc",
+  );
 }
 
 function toNodeStats(stats: WrdataSeriesStats): NodeStats {

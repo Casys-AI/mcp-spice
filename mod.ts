@@ -40,10 +40,12 @@ export {
 export type { NetlistArtifact, NetlistSnapshot } from "./src/api/netlist-artifact.ts";
 export {
   DEFAULT_TIMEOUT_MS,
+  MAX_NGSPICE_LOG_BYTES,
   MAX_OBSERVABLES_PER_KIND,
   MAX_TIMEOUT_SECONDS,
   MAX_TRANSIENT_POINTS,
   MAX_TRANSIENT_WRDATA_BYTES,
+  MAX_WRDATA_BYTES,
   MIN_TIMEOUT_SECONDS,
   NETLIST_MAX_BYTES,
 } from "./src/api/execution-budgets.ts";

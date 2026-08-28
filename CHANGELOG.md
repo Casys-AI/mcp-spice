@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-08-28
+
+### Fixed
+
+- DC `wrdata` now receives the same 8 MiB pre-read byte guard as transient
+  output, and its parser stops at the server-owned 512-point ceiling during
+  traversal. Both breaches return the typed
+  `ngspice_output_limit_exceeded` recovery envelope; no partial DC summary is
+  returned.
+- ngspice stdout and stderr are each capped at 1 MiB while streaming. This
+  closes the diagnostic-capture allocation path used by operating point,
+  transient, and DC runs before log parsing or tail extraction.
+
+### Changed
+
+- `execution-budgets/1.0` now names the shared `wrdata` output budget for DC
+  and transient analyses. `MAX_TRANSIENT_WRDATA_BYTES` remains a compatibility
+  alias for embedding clients.
+- Release jobs use Deno `v2.9.6`; the Docker build pins the multi-architecture
+  Deno `2.9.6` and Debian trixie-slim OCI indexes by digest.
+
 ## [0.5.1] - 2026-08-28
 
 ### Changed

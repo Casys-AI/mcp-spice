@@ -25,9 +25,12 @@ import {
   estimateDcSweepPoints,
   MAX_DC_SWEEP_POINTS,
   NgspiceNotFoundError,
+  parseDcWrdataSeries,
   parseMeasurements,
   parseWrdata,
   parseWrdataSeries,
+  readDcWrdataWithinLimit,
+  readNgspiceOutputWithinLimit,
   readTransientWrdataWithinLimit,
   SpiceError,
   validateDcObservedSweep,
@@ -898,6 +901,72 @@ Deno.test(
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
     }
+  },
+);
+
+Deno.test(
+  "DC wrdata byte budget fails before decoding an adversarial output file",
+  async () => {
+    const directory = await Deno.makeTempDir({ prefix: "spice-dc-wrdata-limit-" });
+    const path = `${directory}/dc_out.dat`;
+    try {
+      await Deno.writeTextFile(path, "0 0\n");
+      const error = await assertRejects(
+        () => readDcWrdataWithinLimit(path, 3),
+        SpiceError,
+      );
+      assertEquals(error.code, "ngspice_output_limit_exceeded");
+      assertEquals(error.context.stage, "dc_wrdata");
+      assertEquals(error.context.limit, "bytes");
+      assertEquals(error.context.maxBytes, 3);
+      assert(error.recovery.includes("No partial DC result"));
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+    }
+  },
+);
+
+Deno.test(
+  "DC wrdata point budget stops the bounded traversal at 512 rows",
+  () => {
+    const content = Array.from(
+      { length: MAX_DC_SWEEP_POINTS + 1 },
+      (_, index) => `${index} ${index}`,
+    ).join("\n");
+    const error = assertThrows(
+      () => parseDcWrdataSeries(content, 1),
+      SpiceError,
+    );
+    assertEquals(error.code, "ngspice_output_limit_exceeded");
+    assertEquals(error.context.stage, "dc_wrdata");
+    assertEquals(error.context.limit, "points");
+    assertEquals(error.context.pointCount, MAX_DC_SWEEP_POINTS + 1);
+    assertEquals(error.context.maxPoints, MAX_DC_SWEEP_POINTS);
+    assert(error.recovery.includes("No partial DC result"));
+  },
+);
+
+Deno.test(
+  "ngspice diagnostic capture bounds the OP log before decoding it",
+  async () => {
+    const bytes = new TextEncoder().encode("oversized diagnostic");
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    let killed = false;
+    const error = await assertRejects(
+      () => readNgspiceOutputWithinLimit(stream, "stdout", () => (killed = true), 3),
+      SpiceError,
+    );
+    assert(killed, "the provider process must be stopped when its log exceeds the cap");
+    assertEquals(error.code, "ngspice_output_limit_exceeded");
+    assertEquals(error.context.stage, "ngspice_log");
+    assertEquals(error.context.stream, "stdout");
+    assertEquals(error.context.limit, "bytes");
+    assertEquals(error.context.maxBytes, 3);
   },
 );
 

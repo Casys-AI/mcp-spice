@@ -12,7 +12,7 @@ import { McpApp } from "@casys/mcp-server";
 import { mapSpiceToolError } from "./src/api/tool-error.ts";
 import { SpiceToolsClient } from "./src/client.ts";
 
-const VERSION = "0.5.1";
+const VERSION = "0.5.2";
 const DEFAULT_PORT = 3023;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 

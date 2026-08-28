@@ -4,15 +4,14 @@
 # Fleet port: 3023  |  Protocol: MCP stateless 2026-07-28
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Stage 1: official multi-arch Deno image — we only copy the binary from here.
-# denoland/deno:debian is multi-arch (amd64 + arm64) and Bookworm-based;
-# the Deno binary is statically linked against glibc and runs on trixie fine.
-FROM denoland/deno:debian AS deno-bin
+# Stage 1: exact official multi-arch Deno 2.9.6 image — we copy only its binary.
+# The pinned OCI index resolves to amd64 sha256:023603… and arm64 sha256:430f9e… .
+FROM denoland/deno:2.9.6@sha256:2014dc167ece617ef7e7ba40631ac2234c59e75ce693e7cc2dc2602b3c87859d AS deno-bin
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Stage 2: Debian trixie slim — provides ngspice 44.2 via apt.
+# Stage 2: exact multi-arch Debian trixie slim index — provides ngspice 44.2 via apt.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM debian:trixie-slim
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
 ENV DENO_DIR=/deno-dir \
     PATH="/usr/local/bin:${PATH}"

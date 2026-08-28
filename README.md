@@ -149,8 +149,10 @@ Historical 0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected
 Each registered operation is non-destructive, idempotent, and closed-world. Simulation
 calls default to a 30-second timeout; `timeout_s` outside 1–300 seconds is refused.
 Both source modes accept at most 1 MiB of netlist bytes. Each `nodes[]` and
-`branch_sources[]` array accepts at most 32 names; transient private `wrdata` is capped
-at 8 MiB and 50,000 samples before reduced statistics are computed.
+`branch_sources[]` array accepts at most 32 names. Private transient and DC `wrdata`
+files are each capped at 8 MiB before decoding; reduced transient statistics stop at
+50,000 samples and DC statistics stop at 512 sweep points. ngspice stdout and stderr
+are each capped at 1 MiB before diagnostic parsing.
 
 ## End-to-end content-addressed workflow
 
