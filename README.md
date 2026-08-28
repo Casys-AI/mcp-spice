@@ -7,25 +7,15 @@ compact, structured results tied to the exact input bytes.
 [container image](https://github.com/Casys-AI/mcp-spice/pkgs/container/mcp-spice) ·
 [changelog](CHANGELOG.md) · [security policy](SECURITY.md)
 
-**Release status.** This source package is `0.5.0`. A push to `main` first runs the
-native ngspice release gate, then publishes `@casys/mcp-spice@0.5.0` to JSR; use the JSR
-commands below once that CI run has succeeded. The separately versioned, digest-pinned
-GHCR image remains the qualified `0.4.1` release until a `v0.5.0` tag has completed its
-multi-architecture image qualification.
+**Release status.** Version `0.5.0` is published on JSR and as a native-gated,
+multi-architecture GHCR image. Executable JSR examples pin `jsr:@casys/mcp-spice@0.5.0`;
+Docker examples pin the qualified OCI index digest. `:latest` is a mutable convenience
+tag, not the authority for a version or capability.
 
-Executable JSR examples pin `jsr:@casys/mcp-spice@0.5.0`. Docker examples deliberately
-pin the published 0.4.1 release-code image by immutable digest. It is published for
-`linux/amd64` and `linux/arm64`, and its revision matches the 0.4.1 release commit.
-`:latest` is a mutable convenience tag, not the authority for a version or capability.
-Operating-point voltage-source branch currents (`branch_sources` /
-`branch_currents_a`) are available in the existing 0.4.1 image; the 0.5.0 additions
-remain source/JSR-only until the versioned image is qualified.
-
-Historical 0.3.0 context: that release's JSR package and digest-pinned image had
-package version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant
-`server/discover` and `/health` reported runtime identity `0.1.0`. 0.3.0
-`spice_simulate_op` required `nodes[]`, rejected `branch_sources`, and did not return
-`branch_currents_a`.
+Historical 0.3.0 context: that release's JSR package and digest-pinned image had package
+version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant `server/discover`
+and `/health` reported runtime identity `0.1.0`. 0.3.0 `spice_simulate_op` required
+`nodes[]`, rejected `branch_sources`, and did not return `branch_currents_a`.
 
 A client can send a netlist directly over MCP. The server computes its SHA-256, applies
 the netlist security policy, stores the bytes under that digest, and returns a reusable
@@ -35,8 +25,8 @@ required for the normal workflow.
 
 The current source checkout can:
 
-- admit exact UTF-8 circuit netlists into an immutable, content-addressed store, with
-  an optional expected SHA-256 assertion;
+- admit exact UTF-8 circuit netlists into an immutable, content-addressed store, with an
+  optional expected SHA-256 assertion;
 - run a DC operating point and return requested node voltages and requested
   voltage-source branch currents;
 - run a transient analysis and return requested voltage and branch-current min/max/final
@@ -51,10 +41,10 @@ it does not decide whether a circuit satisfies a requirement.
 
 ## Quick start
 
-### Published 0.4.1 Docker image
+### Published 0.5.0 Docker image
 
-The published multi-architecture 0.4.1 release-code image is pinned below by digest.
-Its entrypoint is `./docker-entrypoint.sh` and its `CMD` is `http`; the command below
+The published multi-architecture 0.5.0 release-code image is pinned below by digest. Its
+entrypoint is `./docker-entrypoint.sh` and its `CMD` is `http`; the command below
 therefore starts the stateless HTTP transport. The image contains Deno and the tested
 ngspice 44.2 baseline. The named volume preserves submitted netlists across container
 restarts.
@@ -63,7 +53,7 @@ restarts.
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:fb13d8b72feec191977bb1ffbfa12e2d7e34765678f2855bed34aae85b80df28 http
+  ghcr.io/casys-ai/mcp-spice@sha256:96886fe03626f858ac44302d94248c0168159c89816d18f585317b9920259c4e http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. This repository's native HTTP transport
@@ -81,7 +71,7 @@ curl -sS -X POST http://127.0.0.1:3023/mcp \
 For a raw `tools/call` request, also set `Mcp-Name` to the exact tool name in
 `params.name`. Native stdio clients do not use this HTTP transport envelope.
 
-`:latest` is a mutable convenience tag, not the authority for the 0.4.1 contract. Use
+`:latest` is a mutable convenience tag, not the authority for the 0.5.0 contract. Use
 the digest above for a reproducible or production deployment.
 
 ### Native stdio from source or JSR 0.5.0
@@ -103,13 +93,12 @@ deno run --allow-all jsr:@casys/mcp-spice@0.5.0/server --stdio
 
 The JSR module also requires an `ngspice` executable on `PATH`.
 
-The currently qualified 0.4.1 image also runs native stdio when `stdio` is passed to
-Docker:
+The qualified 0.5.0 image also runs native stdio when `stdio` is passed to Docker:
 
 ```bash
 docker run --rm -i \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:fb13d8b72feec191977bb1ffbfa12e2d7e34765678f2855bed34aae85b80df28 stdio
+  ghcr.io/casys-ai/mcp-spice@sha256:96886fe03626f858ac44302d94248c0168159c89816d18f585317b9920259c4e stdio
 ```
 
 Passing `stdio` overrides the image's `CMD http`; it does not start an HTTP child.
@@ -129,7 +118,7 @@ deno run --allow-all jsr:@casys/mcp-spice@0.5.0/server --port=3023
 ```
 
 The version-pinned JSR command and source checkout are separate from the digest-pinned
-published 0.4.1 image, which remains the qualified container release until `v0.5.0`.
+published 0.5.0 image.
 
 For local development from this source checkout:
 
@@ -146,17 +135,16 @@ content-addressed store helpers for embedding in a Deno application.
 
 ## MCP tools
 
-The table below describes the 0.5.0 source and JSR surface. The published 0.4.1 image
-does not yet include the 0.5.0 additions.
-Historical 0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected
-`branch_sources`, and did not return `branch_currents_a`.
+The table below describes the shared 0.5.0 source, JSR, and image surface. Historical
+0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected `branch_sources`, and
+did not return `branch_currents_a`.
 
-| Tool | Purpose | Required input | Structured result |
-| --- | --- | --- | --- |
-| `ngspice_netlist_submit` | Verify, filter, and store exact netlist bytes | `netlist`; optional expected `netlist_sha256` | `sha256`, `bytes`, `uri` |
-| `spice_simulate_op` | Run a DC operating point | `netlist_sha256` and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path` | `node_voltages`, `branch_currents_a`, `measurements`, `not_checked`, `input_artifact` |
-| `spice_simulate_tran` | Run a transient analysis | `netlist_sha256`, `tstep_s`, `tstop_s`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path` | `node_stats`, `branch_current_stats_a`, `measurements`, `simulation`, `not_checked`, `input_artifact` |
-| `spice_simulate_dc` | Run one bounded DC source sweep | `netlist_sha256`, `sweep_source`, `start_v`, `stop_v`, `step_v`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path` | `node_stats`, `branch_current_stats_a`, `measurements`, `sweep`, `not_checked`, `input_artifact` |
+| Tool                     | Purpose                                       | Required input                                                                                                                                                        | Structured result                                                                                     |
+| ------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `ngspice_netlist_submit` | Verify, filter, and store exact netlist bytes | `netlist`; optional expected `netlist_sha256`                                                                                                                         | `sha256`, `bytes`, `uri`                                                                              |
+| `spice_simulate_op`      | Run a DC operating point                      | `netlist_sha256` and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path`                                                 | `node_voltages`, `branch_currents_a`, `measurements`, `not_checked`, `input_artifact`                 |
+| `spice_simulate_tran`    | Run a transient analysis                      | `netlist_sha256`, `tstep_s`, `tstop_s`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path`                          | `node_stats`, `branch_current_stats_a`, `measurements`, `simulation`, `not_checked`, `input_artifact` |
+| `spice_simulate_dc`      | Run one bounded DC source sweep               | `netlist_sha256`, `sweep_source`, `start_v`, `stop_v`, `step_v`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path` | `node_stats`, `branch_current_stats_a`, `measurements`, `sweep`, `not_checked`, `input_artifact`      |
 
 Each registered operation is non-destructive, idempotent, and closed-world. Simulation
 calls default to a 30-second timeout; `timeout_s` is clamped to the range 1–300 seconds.
@@ -206,8 +194,8 @@ requests node voltages only:
 ```
 
 The structured result contains the requested voltages and the identity of the private
-snapshot consumed by ngspice. This example is abridged only to shorten the
-`not_checked` list:
+snapshot consumed by ngspice. This example is abridged only to shorten the `not_checked`
+list:
 
 ```json
 {
@@ -320,10 +308,10 @@ For the repository's RC fixture, the key result fields are:
 
 `measurements` is a cross-tool convenience view: it mirrors the operating-point voltage
 and the transient `final_v`. Use `node_stats` or `branch_current_stats_a` when extrema
-or timestamps matter. The actual point count is adaptive and is therefore not necessarily
-`tstop_s / tstep_s`. If an extremum has equal samples, its timestamp is the first
-matching sample. Raw ngspice `i(Vsource)` is in amperes and positive into the source's
-positive terminal; a delivering source normally appears negative.
+or timestamps matter. The actual point count is adaptive and is therefore not
+necessarily `tstop_s / tstep_s`. If an extremum has equal samples, its timestamp is the
+first matching sample. Raw ngspice `i(Vsource)` is in amperes and positive into the
+source's positive terminal; a delivering source normally appears negative.
 
 ### 4. Run a bounded DC source sweep
 
@@ -345,8 +333,8 @@ exceed 512 internal sweep points.
 ```
 
 For the divider above, `out` ranges from 0 V to 2 V, with its final sample at a swept
-source value of 3 V. `branch_current_stats_a.Vin` is reported separately in amperes;
-it is not mixed into the voltage-only `measurements` alias.
+source value of 3 V. `branch_current_stats_a.Vin` is reported separately in amperes; it
+is not mixed into the voltage-only `measurements` alias.
 
 ## Netlist and source contract
 
@@ -368,10 +356,10 @@ The following caller-controlled constructs are rejected before ngspice starts:
 - `.shell` and bare `shell` commands;
 - whitespace-delimited absolute paths beginning with `/` or `~/`.
 
-Requested node names and all voltage-source names are validated before interpolation into
-the server-owned control block. This includes operating-point, transient, and DC-sweep
-observables, plus the DC sweep source. Names may contain letters, digits, underscores,
-dots, hyphens, and `#`; ground is `0` for a node only.
+Requested node names and all voltage-source names are validated before interpolation
+into the server-owned control block. This includes operating-point, transient, and
+DC-sweep observables, plus the DC sweep source. Names may contain letters, digits,
+underscores, dots, hyphens, and `#`; ground is `0` for a node only.
 
 There are two mutually exclusive input modes:
 
@@ -402,9 +390,9 @@ Every successful tool response has a short text `content` summary and closed
   `{ "code", "context", "recovery" }`. Examples include `netlist_sha256_mismatch`,
   `netlist_forbidden_directive`, `invalid_node_name`, `ngspice_unavailable`, and
   `ngspice_dc_grid_invalid`.
-- ngspice non-zero exits, error/fatal log lines, malformed or divergent `wrdata`, missing
-  output, and absent requested observables fail the tool call instead of returning a
-  partial success.
+- ngspice non-zero exits, error/fatal log lines, malformed or divergent `wrdata`,
+  missing output, and absent requested observables fail the tool call instead of
+  returning a partial success.
 
 The digest proves which bytes this process consumed. It does not, by itself, turn a
 numerical result into a requirement verdict or a qualified engineering claim.
@@ -414,22 +402,21 @@ numerical result into a requirement verdict or a qualified engineering claim.
 The present source surface stays deliberately bounded. It exposes an operating point,
 transient summaries with timestamps and requested branch currents, and a one-dimensional
 DC source sweep reduced to extrema/final summaries. It does not expose AC analysis,
-noise analysis, Monte Carlo, caller-supplied control scripts, or waveform samples.
-The separately qualified 0.4.1 image remains the earlier container boundary described at
-the top of this README.
+noise analysis, Monte Carlo, caller-supplied control scripts, or waveform samples. The
+qualified 0.5.0 image exposes this same bounded analysis surface.
 
-| Area                 | Current behavior                                                                      |
-| -------------------- | ------------------------------------------------------------------------------------- |
-| DC operating point   | One `.op` point. Returns requested node voltages and requested voltage-source branch currents. |
+| Area                 | Current behavior                                                                                                            |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| DC operating point   | One `.op` point. Returns requested node voltages and requested voltage-source branch currents.                              |
 | DC source sweep      | One named independent voltage source, explicit start/stop/step in volts, at most 512 internal points, reduced results only. |
-| Transient            | Requested node voltage and voltage-source current min/max/final summaries, extrema timestamps, and adaptive point count. |
-| Initial conditions   | Server-owned transient command uses a DC operating point; UIC is not exposed          |
-| Temperature          | ngspice default TNOM 27°C unless the netlist supplies `.TEMP` or `.OPTIONS TNOM`      |
-| Models               | Inline model and subcircuit definitions; no caller-selected external libraries        |
-| Convergence          | ngspice defaults; detected failures become tool errors                                |
-| Sweeps and variation | No multidimensional sweep, AC analysis, noise analysis, Monte Carlo, or worst-case aggregation tool |
-| Other observables    | No waveform samples in the response; no caller-supplied `.control` script             |
-| Interpretation       | No specification, safety, EMC, lifetime, or compliance verdict                        |
+| Transient            | Requested node voltage and voltage-source current min/max/final summaries, extrema timestamps, and adaptive point count.    |
+| Initial conditions   | Server-owned transient command uses a DC operating point; UIC is not exposed                                                |
+| Temperature          | ngspice default TNOM 27°C unless the netlist supplies `.TEMP` or `.OPTIONS TNOM`                                            |
+| Models               | Inline model and subcircuit definitions; no caller-selected external libraries                                              |
+| Convergence          | ngspice defaults; detected failures become tool errors                                                                      |
+| Sweeps and variation | No multidimensional sweep, AC analysis, noise analysis, Monte Carlo, or worst-case aggregation tool                         |
+| Other observables    | No waveform samples in the response; no caller-supplied `.control` script                                                   |
+| Interpretation       | No specification, safety, EMC, lifetime, or compliance verdict                                                              |
 
 These are interface limits, not limits of ngspice itself.
 
@@ -504,7 +491,7 @@ deno run --allow-all scripts/gen_fixtures.ts
 ```
 
 Build a local container from this source checkout. That local tag is not the
-digest-pinned published 0.4.1 release-code image:
+digest-pinned published 0.5.0 release-code image:
 
 ```bash
 docker build -t mcp-spice:local .
