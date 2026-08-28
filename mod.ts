@@ -13,16 +13,24 @@ export { SpiceToolsClient } from "./src/client.ts";
 export { allTools, getToolByName, toolsByCategory } from "./src/tools/mod.ts";
 export type { SpiceTool, SpiceToolCategory } from "./src/tools/types.ts";
 export {
+  estimateDcSweepPoints,
+  MAX_DC_SWEEP_POINTS,
   NgspiceNotFoundError,
   parseMeasurements,
   parseWrdata,
+  parseWrdataSeries,
   SpiceError,
 } from "./src/api/ngspice.ts";
 export type {
+  BranchCurrentStats,
+  DcBranchCurrentStats,
+  DcNodeStats,
+  DcResult,
   NodeStats,
   OpResult,
   SpiceMeasurement,
   TranResult,
+  WrdataSeriesStats,
 } from "./src/api/ngspice.ts";
 export {
   NetlistArtifactError,
@@ -32,6 +40,7 @@ export {
 export type { NetlistArtifact, NetlistSnapshot } from "./src/api/netlist-artifact.ts";
 export {
   NetlistSecurityError,
+  SpiceIdentifierError,
   validateNetlistSecurity,
   validateNodeName,
   validateSourceName,

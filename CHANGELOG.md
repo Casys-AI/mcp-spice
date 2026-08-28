@@ -4,7 +4,40 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-08-28
+
+### Added
+
+- `spice_simulate_dc`: one server-owned, bounded DC sweep over an explicitly named
+  independent voltage source. It accepts start/stop/step in volts, enforces a 512-point
+  internal cap, and returns only reduced voltage/current extrema and final summaries.
+  It does not return a raw transfer curve.
+- `spice_simulate_tran` optional `branch_sources[]`: requested voltage-source branch
+  current min/max/final summaries in amperes, separate from voltage-only
+  `measurements`.
+- `spice_simulate_tran` extrema timestamps: node and branch summaries now include
+  `min_at_s`, `max_at_s`, and `final_at_s`. Equal extrema resolve to the earliest
+  sampled time.
+
+### Changed
+
+- `ngspice_netlist_submit` now accepts `netlist` alone. `netlist_sha256` is an optional
+  expected-digest assertion: the server always computes and returns the digest, and a
+  supplied mismatch still fails before any store write.
+- Transient and DC observable inputs are closed and bounded; node and voltage-source
+  names are validated before interpolation into server-owned ngspice control commands.
+
+### Fixed
+
+- `wrdata` parsing is now fail-closed: a malformed numeric row, non-finite value,
+  wrong column count, or divergent interleaved axis aborts the whole result rather than
+  silently retaining partial statistics. DC additionally verifies the observed grid
+  against the server-owned start/stop/step request before returning a summary.
+- Identifier refusals and ngspice execution failures are serialized as MCP business
+  errors with `{ code, context, recovery }`, rather than surfacing as free-text internal
+  JSON-RPC failures.
+- The `main` JSR release gate now installs ngspice and runs the native integration suite
+  before publishing. README-linked release metadata is included in the JSR package.
 
 ## [0.4.1] - 2026-08-27
 

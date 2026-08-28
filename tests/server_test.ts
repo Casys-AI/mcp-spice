@@ -17,11 +17,27 @@ import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { NetlistArtifactError } from "../src/api/netlist-artifact.ts";
 import {
   NetlistSecurityError,
+  SpiceIdentifierError,
   validateNetlistSecurity,
 } from "../src/api/netlist-security.ts";
-import { parseMeasurements, parseWrdata, SpiceError } from "../src/api/ngspice.ts";
+import {
+  estimateDcSweepPoints,
+  MAX_DC_SWEEP_POINTS,
+  NgspiceNotFoundError,
+  parseMeasurements,
+  parseWrdata,
+  parseWrdataSeries,
+  SpiceError,
+  validateDcObservedSweep,
+} from "../src/api/ngspice.ts";
+import {
+  isMachineReadableError,
+  mapSpiceToolError,
+  SpiceToolError,
+} from "../src/api/tool-error.ts";
 import { allTools } from "../src/tools/mod.ts";
 import { createSpiceServer, parseCli } from "../server.ts";
+import * as publicApi from "../mod.ts";
 
 const RUN_NATIVE = Deno.env.get("SPICE_RUN_NATIVE") === "1";
 const PACKAGE_VERSION = (JSON.parse(
@@ -125,7 +141,7 @@ Deno.test(
 );
 
 Deno.test(
-  "mcp-spice tools/list returns submit, spice_simulate_op and spice_simulate_tran",
+  "mcp-spice tools/list returns submit and the bounded simulation operations",
   async () => {
     const { app } = createSpiceServer({ logger: () => {} });
     const port = freePort();
@@ -142,6 +158,7 @@ Deno.test(
       assert(tools.some((t) => t.name === "ngspice_netlist_submit"));
       assert(tools.some((t) => t.name === "spice_simulate_op"));
       assert(tools.some((t) => t.name === "spice_simulate_tran"));
+      assert(tools.some((t) => t.name === "spice_simulate_dc"));
     } finally {
       await http.shutdown();
     }
@@ -190,7 +207,10 @@ Deno.test(
     assertEquals(required, ["sha256", "bytes", "uri"]);
     const inputRequired = (tool.inputSchema as Record<string, unknown>)
       .required as string[];
-    assertEquals(inputRequired, ["netlist", "netlist_sha256"]);
+    assertEquals(inputRequired, ["netlist"]);
+    const inputProperties = (tool.inputSchema as Record<string, unknown>)
+      .properties as Record<string, unknown>;
+    assert(inputProperties.netlist_sha256 !== undefined);
   },
 );
 
@@ -213,9 +233,9 @@ Deno.test(
 );
 
 Deno.test(
-  "Every spice tool that consumes a netlist requires netlist_sha256; path is optional on simulate",
+  "Every spice simulation requires netlist_sha256; path is optional on simulate",
   () => {
-    for (const tool of allTools) {
+    for (const tool of allTools.filter((t) => t.category === "simulation")) {
       const schema = tool.inputSchema as Record<string, unknown>;
       const required = schema.required as string[];
       assert(
@@ -298,6 +318,153 @@ Deno.test(
 );
 
 Deno.test(
+  "spice_simulate_tran schema accepts node or branch observables and advertises timestamped ampere summaries",
+  () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_tran");
+    assert(tool, "spice_simulate_tran must be registered");
+    const input = tool.inputSchema as Record<string, unknown>;
+    const required = input.required as string[];
+    assertEquals(required.includes("nodes"), false);
+    assertEquals(required.includes("branch_sources"), false);
+    const anyOf = input.anyOf as Array<{ required: string[] }>;
+    assert(anyOf.some((alternative) => alternative.required.includes("nodes")));
+    assert(
+      anyOf.some((alternative) => alternative.required.includes("branch_sources")),
+    );
+
+    const output = tool.outputSchema as Record<string, unknown>;
+    assertEquals(output.additionalProperties, false);
+    const outputRequired = output.required as string[];
+    assert(outputRequired.includes("branch_current_stats_a"));
+    const properties = output.properties as Record<string, Record<string, unknown>>;
+    const nodeStats = properties.node_stats?.additionalProperties as Record<
+      string,
+      unknown
+    >;
+    assert((nodeStats.required as string[]).includes("min_at_s"));
+    assert((nodeStats.required as string[]).includes("max_at_s"));
+    assert((nodeStats.required as string[]).includes("final_at_s"));
+    const branchStats = properties.branch_current_stats_a
+      ?.additionalProperties as Record<string, unknown>;
+    assert((branchStats.required as string[]).includes("min_a"));
+    assert((branchStats.required as string[]).includes("final_a"));
+  },
+);
+
+Deno.test(
+  "spice_simulate_dc declares a closed, bounded source-sweep contract",
+  () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_dc");
+    assert(tool, "spice_simulate_dc must be registered");
+    const input = tool.inputSchema as Record<string, unknown>;
+    assertEquals(input.additionalProperties, false);
+    const required = input.required as string[];
+    for (
+      const field of [
+        "netlist_sha256",
+        "sweep_source",
+        "start_v",
+        "stop_v",
+        "step_v",
+      ]
+    ) {
+      assert(required.includes(field), `${field} must be required`);
+    }
+    const properties = input.properties as Record<string, Record<string, unknown>>;
+    assertEquals(properties.nodes?.maxItems, 32);
+    assertEquals(properties.branch_sources?.maxItems, 32);
+    assert(String(properties.step_v?.description ?? "").includes("512"));
+
+    const output = tool.outputSchema as Record<string, unknown>;
+    assertEquals(output.additionalProperties, false);
+    const outputRequired = output.required as string[];
+    assert(outputRequired.includes("sweep"));
+    assert(outputRequired.includes("branch_current_stats_a"));
+  },
+);
+
+Deno.test(
+  "estimateDcSweepPoints fixes DC admission bounds and direction semantics",
+  () => {
+    // The estimate is deliberately conservative for a non-dividing stop: a
+    // 0 → 1 V sweep at 0.3 V admits an upper bound of five positions even
+    // though ngspice's observed in-range grid has four (0, 0.3, 0.6, 0.9).
+    assertEquals(estimateDcSweepPoints(0, 511, 1), MAX_DC_SWEEP_POINTS);
+    assertThrows(
+      () => estimateDcSweepPoints(0, 512, 1),
+      TypeError,
+      "512-point server limit",
+    );
+    assertEquals(estimateDcSweepPoints(3, 0, -1), 4);
+    assertThrows(
+      () => estimateDcSweepPoints(0, 3, -1),
+      TypeError,
+      "matching sign",
+    );
+    assertEquals(estimateDcSweepPoints(2, 2, -0.5), 1);
+    assertEquals(estimateDcSweepPoints(0, 1, 0.3), 5);
+  },
+);
+
+Deno.test(
+  "validateDcObservedSweep accepts reachable descending and non-dividing grids, then rejects divergence",
+  () => {
+    validateDcObservedSweep([0, 0.3, 0.6, 0.9], 0, 1, 0.3);
+    validateDcObservedSweep([3, 2, 1, 0], 3, 0, -1);
+    validateDcObservedSweep([2], 2, 2, 1);
+
+    const error = assertThrows(
+      () => validateDcObservedSweep([0, 0.3, 0.6, 1], 0, 1, 0.3),
+      SpiceError,
+      "axis position does not match the requested step",
+    );
+    assertEquals(error.code, "ngspice_dc_grid_invalid");
+  },
+);
+
+Deno.test(
+  "package surface keeps the raw DC executor internal and publishes README-linked metadata",
+  () => {
+    assertEquals(
+      "runNgspiceDc" in publicApi,
+      false,
+      "The root package must not expose an executor that bypasses tool-level netlist validation.",
+    );
+    const manifest = JSON.parse(
+      Deno.readTextFileSync(new URL("../deno.json", import.meta.url)),
+    ) as { publish: { include: string[] } };
+    for (const file of ["README.md", "CHANGELOG.md", "SECURITY.md", "CITATION.cff"]) {
+      assert(
+        manifest.publish.include.includes(file),
+        `${file} must be included in the JSR package because README links it relatively.`,
+      );
+    }
+  },
+);
+
+Deno.test(
+  "spice_simulate_dc rejects a non-voltage sweep source before resolving the netlist",
+  async () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_dc");
+    assert(tool);
+    const error = await assertRejects(
+      async () => {
+        await tool.handler({
+          netlist_sha256: "a".repeat(64),
+          sweep_source: "Iin",
+          start_v: 0,
+          stop_v: 1,
+          step_v: 0.1,
+          nodes: ["out"],
+        });
+      },
+      SpiceToolError,
+    );
+    assertEquals(error.code, "invalid_sweep_source");
+  },
+);
+
+Deno.test(
   "spice_simulate_op handler rejects a call with neither nodes nor branch_sources",
   async () => {
     const tool = allTools.find((t) => t.name === "spice_simulate_op");
@@ -336,16 +503,83 @@ Deno.test(
   async () => {
     const tool = allTools.find((t) => t.name === "spice_simulate_op");
     assert(tool);
-    await assertRejects(
+    const error = await assertRejects(
       async () => {
         await tool.handler({
           netlist_sha256: "a".repeat(64),
           branch_sources: ["Vin); quit"],
         });
       },
-      TypeError,
+      SpiceIdentifierError,
       "Invalid source name",
     );
+    assertEquals(error.code, "invalid_source_name");
+    assertEquals(error.context.kind, "source");
+  },
+);
+
+Deno.test(
+  "tools/call maps selector validation to a machine-readable MCP error",
+  async () => {
+    const { app } = createSpiceServer({ logger: () => {} });
+    const port = freePort();
+    const http = await app.startHttp({
+      port,
+      hostname: "127.0.0.1",
+      onListen: () => {},
+    });
+    const url = `http://127.0.0.1:${port}/mcp`;
+    try {
+      const called = await rpc(url, "tools/call", {
+        name: "spice_simulate_op",
+        arguments: {
+          netlist_sha256: "a".repeat(64),
+          nodes: ["out); quit"],
+        },
+      });
+      assertEquals(called.body.error, undefined);
+      const result = called.body.result as Record<string, unknown>;
+      assertEquals(result.isError, true);
+      const content = result.content as Array<Record<string, unknown>>;
+      const mapped = JSON.parse(content[0].text as string) as {
+        code: string;
+        context: Record<string, unknown>;
+        recovery: string;
+      };
+      assertEquals(mapped.code, "invalid_node_name");
+      assertEquals(mapped.context.tool, "spice_simulate_op");
+      assertEquals(mapped.context.kind, "node");
+      assert(typeof mapped.recovery === "string" && mapped.recovery.length > 0);
+    } finally {
+      await http.shutdown();
+    }
+  },
+);
+
+Deno.test(
+  "ngspice engine errors have a structured MCP mapping without raw diagnostics",
+  () => {
+    const engineError = new SpiceError("private engine log tail");
+    const missingEngine = new NgspiceNotFoundError();
+    for (
+      const [error, expectedCode] of [
+        [engineError, "ngspice_simulation_failed"],
+        [missingEngine, "ngspice_unavailable"],
+      ] as const
+    ) {
+      assert(isMachineReadableError(error));
+      const serialized = mapSpiceToolError(error, "spice_simulate_op");
+      assert(serialized !== null);
+      const mapped = JSON.parse(serialized) as {
+        code: string;
+        context: Record<string, unknown>;
+        recovery: string;
+      };
+      assertEquals(mapped.code, expectedCode);
+      assertEquals(mapped.context.tool, "spice_simulate_op");
+      assert(typeof mapped.recovery === "string" && mapped.recovery.length > 0);
+      assertEquals(serialized.includes("private engine log tail"), false);
+    }
   },
 );
 
@@ -495,6 +729,15 @@ Deno.test(
         nodeStats["out"].final_v
       }`,
     );
+    assertEquals(nodeStats["out"].min_at_s, 0);
+    assert(
+      Math.abs(nodeStats["out"].final_at_s - 6e-3) < 1e-12,
+      `Expected final sample at 6 ms, got ${nodeStats["out"].final_at_s}`,
+    );
+    assert(
+      nodeStats["out"].max_at_s <= nodeStats["out"].final_at_s,
+      "maximum timestamp must be inside the sampled transient window",
+    );
 
     // v(in) = PULSE source = 1V after rise; final must be 1.0V
     assert(
@@ -505,9 +748,86 @@ Deno.test(
 );
 
 Deno.test(
+  "parseWrdataSeries keeps the first sampled independent-axis position on extrema ties",
+  () => {
+    const content = "0 1 0 -1\n1 1 1 -2\n2 0 2 -2\n";
+    const { seriesStats, nPoints } = parseWrdataSeries(content, 2);
+    assertEquals(nPoints, 3);
+    assertEquals(seriesStats[0], {
+      min: 0,
+      max: 1,
+      final: 0,
+      minAt: 2,
+      maxAt: 0,
+      finalAt: 2,
+    });
+    assertEquals(seriesStats[1], {
+      min: -2,
+      max: -1,
+      final: -2,
+      minAt: 1,
+      maxAt: 0,
+      finalAt: 2,
+    });
+  },
+);
+
+Deno.test(
+  "parseWrdataSeries fails closed on a malformed central row instead of returning partial statistics",
+  () => {
+    const error = assertThrows(
+      () =>
+        parseWrdataSeries(
+          "0 1 0 2\n1 3 bad 4\n2 5 2 6\n",
+          2,
+        ),
+      SpiceError,
+      "non-finite or non-numeric token",
+    );
+    assertEquals(error.code, "ngspice_output_invalid");
+    assertEquals(error.context.lineNumber, 2);
+  },
+);
+
+Deno.test(
+  "parseWrdataSeries rejects malformed numeric widths and non-finite numeric rows",
+  () => {
+    for (
+      const [label, content] of [
+        ["wrong-width", "0 1\n1 2 1\n"],
+        ["non-finite", "0 1\n1 Infinity\n"],
+      ] as const
+    ) {
+      const error = assertThrows(
+        () => parseWrdataSeries(content, 1),
+        SpiceError,
+      );
+      assertEquals(
+        error.code,
+        "ngspice_output_invalid",
+        `${label} wrdata row must fail closed.`,
+      );
+    }
+  },
+);
+
+Deno.test(
+  "parseWrdataSeries rejects divergent interleaved axes rather than mixing observables",
+  () => {
+    const error = assertThrows(
+      () => parseWrdataSeries("0 1 0 2\n1 3 1.01 4\n2 5 2 6\n", 2),
+      SpiceError,
+      "interleaved axes diverge",
+    );
+    assertEquals(error.code, "ngspice_output_invalid");
+    assertEquals(error.context.lineNumber, 2);
+  },
+);
+
+Deno.test(
   "parseWrdata raises SpiceError when content has no numeric rows",
   () => {
-    const empty = "no data here\njust text\n";
+    const empty = "\n\n";
     try {
       parseWrdata(empty, ["out"]);
       assert(false, "Should have thrown SpiceError");
@@ -1075,11 +1395,19 @@ C1 out 0 1e-6
         tstep_s: 10e-6,
         tstop_s: 6e-3,
         nodes: ["out", "in"],
+        branch_sources: ["Vin"],
       }) as { structuredContent: Record<string, unknown> };
       const sc = result.structuredContent;
       const nodeStats = sc.node_stats as Record<
         string,
-        { min_v: number; max_v: number; final_v: number }
+        {
+          min_v: number;
+          max_v: number;
+          final_v: number;
+          min_at_s: number;
+          max_at_s: number;
+          final_at_s: number;
+        }
       >;
       const simulation = sc.simulation as Record<string, unknown>;
 
@@ -1105,6 +1433,40 @@ C1 out 0 1e-6
         `Expected n_points > 100, got ${simulation.n_points}`,
       );
       assertEquals(simulation.tstop_s, 6e-3);
+      assert(
+        Math.abs(nodeStats["out"].final_at_s - 6e-3) < 1e-12,
+        `Expected v(out) final_at_s=0.006, got ${nodeStats["out"].final_at_s}`,
+      );
+      assert(
+        nodeStats["out"].min_at_s >= 0 &&
+          nodeStats["out"].max_at_s <= nodeStats["out"].final_at_s,
+        "node extrema timestamps must be within the simulated window",
+      );
+
+      const branchStats = sc.branch_current_stats_a as Record<
+        string,
+        {
+          min_a: number;
+          max_a: number;
+          final_a: number;
+          min_at_s: number;
+          max_at_s: number;
+          final_at_s: number;
+        }
+      >;
+      assert("Vin" in branchStats, "requested Vin branch current must be returned");
+      assert(
+        (branchStats["Vin"].min_a ?? 0) < -5e-4,
+        `Expected Vin to deliver current at the transient start, got ${
+          branchStats["Vin"].min_a
+        }`,
+      );
+      assert(
+        Math.abs(branchStats["Vin"].final_at_s - 6e-3) < 1e-12,
+        "branch current final timestamp must be the final sample time",
+      );
+      const measurements = sc.measurements as Record<string, { value: number }>;
+      assertEquals(Object.keys(measurements).sort(), ["in", "out"]);
 
       const artifact = sc.input_artifact as Record<string, unknown>;
       assertEquals(artifact.sha256, sha256);
@@ -1150,6 +1512,122 @@ Vin in 0 DC 1
         ".include",
       );
     } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "spice_simulate_dc runs a bounded source sweep and returns reduced voltage/current summaries",
+  ignore: !RUN_NATIVE,
+  fn: async () => {
+    const tool = allTools.find((t) => t.name === "spice_simulate_dc");
+    assert(tool, "spice_simulate_dc must be registered");
+
+    const tmpDir = await Deno.makeTempDir({ prefix: "spice-dc-test-" });
+    const netlistPath = `${tmpDir}/vdiv.cir`;
+    await Deno.writeTextFile(netlistPath, VDIV_CIRCUIT);
+    const sha256 = await sha256File(netlistPath);
+    try {
+      const result = await tool.handler({
+        netlist_path: netlistPath,
+        netlist_sha256: sha256,
+        sweep_source: "Vin",
+        start_v: 0,
+        stop_v: 3,
+        step_v: 1,
+        nodes: ["out"],
+        branch_sources: ["Vin"],
+      }) as {
+        content: string;
+        structuredContent: Record<string, unknown>;
+      };
+      const sc = result.structuredContent;
+      const nodeStats = sc.node_stats as Record<
+        string,
+        {
+          min_v: number;
+          max_v: number;
+          final_v: number;
+          min_at_source_v: number;
+          max_at_source_v: number;
+          final_at_source_v: number;
+        }
+      >;
+      assertEquals(nodeStats["out"], {
+        min_v: 0,
+        max_v: 2,
+        final_v: 2,
+        min_at_source_v: 0,
+        max_at_source_v: 3,
+        final_at_source_v: 3,
+      });
+      const branchStats = sc.branch_current_stats_a as Record<
+        string,
+        {
+          min_a: number;
+          max_a: number;
+          final_a: number;
+          min_at_source_v: number;
+          max_at_source_v: number;
+          final_at_source_v: number;
+        }
+      >;
+      assert(
+        Math.abs(branchStats["Vin"].min_a - (-1e-3)) < 1e-12,
+        `Expected i(Vin) min=-1mA, got ${branchStats["Vin"].min_a}`,
+      );
+      assertEquals(branchStats["Vin"].max_a, 0);
+      assertEquals(branchStats["Vin"].final_at_source_v, 3);
+      const sweep = sc.sweep as Record<string, unknown>;
+      assertEquals(sweep.source, "Vin");
+      assertEquals(sweep.n_points, 4);
+      assertEquals(sweep.max_points, 512);
+      assert(result.content.includes("full transfer curve not returned"));
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: "tools/call spice_simulate_dc is a real MCP-path smoke",
+  ignore: !RUN_NATIVE,
+  fn: async () => {
+    const { app } = createSpiceServer({ logger: () => {} });
+    const port = freePort();
+    const http = await app.startHttp({
+      port,
+      hostname: "127.0.0.1",
+      onListen: () => {},
+    });
+    const url = `http://127.0.0.1:${port}/mcp`;
+    const tmpDir = await Deno.makeTempDir({ prefix: "spice-dc-wire-" });
+    try {
+      const netlistPath = `${tmpDir}/vdiv.cir`;
+      await Deno.writeTextFile(netlistPath, VDIV_CIRCUIT);
+      const sha256 = await sha256File(netlistPath);
+      const called = await rpc(url, "tools/call", {
+        name: "spice_simulate_dc",
+        arguments: {
+          netlist_path: netlistPath,
+          netlist_sha256: sha256,
+          sweep_source: "Vin",
+          start_v: 0,
+          stop_v: 3,
+          step_v: 1,
+          nodes: ["out"],
+        },
+      });
+      assertEquals(called.body.error, undefined);
+      const result = called.body.result as Record<string, unknown>;
+      const sc = result.structuredContent as Record<string, unknown>;
+      const nodeStats = sc.node_stats as Record<string, { final_v: number }>;
+      assertEquals(nodeStats["out"].final_v, 2);
+      assertEquals(sc.branch_current_stats_a, {});
+    } finally {
+      await http.shutdown();
       await Deno.remove(tmpDir, { recursive: true });
     }
   },

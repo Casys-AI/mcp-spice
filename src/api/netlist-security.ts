@@ -48,6 +48,39 @@ export class NetlistSecurityError extends Error implements MachineReadableErrorF
 }
 
 /**
+ * Raised when a caller-provided node or voltage-source selector is unsafe to
+ * interpolate into the server-owned ngspice control block.
+ *
+ * This is intentionally machine-readable: selector rejection happens after
+ * JSON Schema has accepted a string, so it must become an MCP tool error
+ * rather than an unstructured JSON-RPC internal error.
+ */
+export class SpiceIdentifierError extends Error implements MachineReadableErrorFields {
+  readonly code: string;
+  readonly context: Record<string, unknown>;
+  readonly recovery: string;
+
+  constructor(
+    identifier: string,
+    toolName: string,
+    kind: "node" | "source",
+  ) {
+    const label = kind === "node" ? "node" : "source";
+    const labelCap = kind === "node" ? "Node" : "Source";
+    super(
+      `[${toolName}] Invalid ${label} name: "${identifier}". ` +
+        `${labelCap} names must contain only letters, digits, underscores, dots, ` +
+        "hyphens, and #.",
+    );
+    this.name = "SpiceIdentifierError";
+    this.code = `invalid_${kind}_name`;
+    this.context = { toolName, kind, identifier };
+    this.recovery =
+      `Pass a bare ${label} name using only letters, digits, underscores, dots, hyphens, and #.`;
+  }
+}
+
+/**
  * Validate that a netlist string contains no forbidden directives.
  *
  * Processes line by line; raises on the first offending construct found.
@@ -113,13 +146,7 @@ function validateSpiceIdentifier(
 ): void {
   if (kind === "node" && name === "0") return; // ground node is always valid
   if (name.length === 0 || !SPICE_IDENTIFIER.test(name)) {
-    const label = kind === "node" ? "node" : "source";
-    const labelCap = kind === "node" ? "Node" : "Source";
-    throw new TypeError(
-      `[${toolName}] Invalid ${label} name: "${name}". ` +
-        `${labelCap} names must contain only letters, digits, underscores, dots, ` +
-        "hyphens, and #.",
-    );
+    throw new SpiceIdentifierError(name, toolName, kind);
   }
 }
 
@@ -133,7 +160,7 @@ function validateSpiceIdentifier(
  *
  * The special ground node "0" is accepted.
  *
- * @throws {TypeError} When the name contains forbidden characters.
+ * @throws {SpiceIdentifierError} When the name contains forbidden characters.
  */
 export function validateNodeName(name: string, toolName: string): void {
   validateSpiceIdentifier(name, toolName, "node");
@@ -144,7 +171,7 @@ export function validateNodeName(name: string, toolName: string): void {
  *
  * Uses the same injection-safe identifier alphabet as {@link validateNodeName}.
  *
- * @throws {TypeError} When the name contains forbidden characters.
+ * @throws {SpiceIdentifierError} When the name contains forbidden characters.
  */
 export function validateSourceName(name: string, toolName: string): void {
   validateSpiceIdentifier(name, toolName, "source");

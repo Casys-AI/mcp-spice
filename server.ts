@@ -12,7 +12,7 @@ import { McpApp } from "@casys/mcp-server";
 import { mapSpiceToolError } from "./src/api/tool-error.ts";
 import { SpiceToolsClient } from "./src/client.ts";
 
-const VERSION = "0.4.1";
+const VERSION = "0.5.0";
 const DEFAULT_PORT = 3023;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 
@@ -34,14 +34,17 @@ export function createSpiceServer(
     backpressureStrategy: "queue",
     validateSchema: true,
     instructions: "SPICE circuit simulation via ngspice 44.2 batch mode. " +
-      "Admit a netlist with ngspice_netlist_submit (UTF-8 bytes + declared " +
-      "SHA-256) to obtain a content-addressed reference. " +
-      "spice_simulate_op and spice_simulate_tran accept that reference via " +
-      "netlist_sha256 (optional netlist_uri) or a filesystem path as before. " +
+      "Admit a netlist with ngspice_netlist_submit (exact UTF-8 bytes; an " +
+      "expected SHA-256 is optional) to obtain a content-addressed reference. " +
+      "spice_simulate_op, spice_simulate_tran, and spice_simulate_dc accept " +
+      "that reference via netlist_sha256 (optional netlist_uri) or a filesystem " +
+      "path as before. " +
       "spice_simulate_op returns requested node voltages and optional " +
       "voltage-source branch currents (raw i(Vsource), positive into the " +
-      "source positive terminal). spice_simulate_tran returns node voltage " +
-      "min/max/final only; it does not return branch currents. " +
+      "source positive terminal). spice_simulate_tran returns requested node " +
+      "voltage and branch-current min/max/final summaries with timestamps. " +
+      "spice_simulate_dc runs one bounded voltage-source sweep and returns " +
+      "reduced summaries, never a raw transfer curve. " +
       "The caller supplies the circuit definition only (no .control block). " +
       "The server validates the netlist for forbidden directives, writes the " +
       ".control block, runs ngspice, and returns raw scalar results. " +

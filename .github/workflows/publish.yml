@@ -7,7 +7,10 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Keep the apt-provided native-engine gate reproducible across runner
+    # image rollovers. The published container still independently pins its
+    # own Debian/ngspice baseline.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -15,8 +18,14 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Install tested ngspice baseline
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ngspice
+          ngspice --version
+
       - name: Verify release gates
-        run: deno task release:check
+        run: SPICE_RUN_NATIVE=1 deno task release:check
 
   publish-jsr:
     needs: check

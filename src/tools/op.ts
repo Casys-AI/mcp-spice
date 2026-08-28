@@ -29,7 +29,7 @@ const TOOL_NAME = "spice_simulate_op";
 const NOT_CHECKED = [
   "Temperature: simulation runs at TNOM=27°C unless the netlist overrides .TEMP or .OPTIONS TNOM.",
   "Convergence: ngspice uses default DC tolerances (ABSTOL=1e-12, RELTOL=1e-3); divergent circuits raise SpiceError.",
-  "Sweep: this tool returns a single .op point; DC source sweeps are not exposed by this server.",
+  "Sweep: this tool returns one .op point; use spice_simulate_dc for the separate bounded one-dimensional DC sweep.",
   "Monte Carlo / worst-case analysis is not performed.",
   "Non-linear component models require .model definitions embedded in the netlist; no model library is provided by this server.",
   "Unrequested branches are not extracted; only sources listed in branch_sources are returned as raw ngspice i(Vsource).",

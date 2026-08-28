@@ -3,7 +3,7 @@
  * than a transport mock so legacy client negotiation and a tool call stay
  * covered together.
  */
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { TextLineStream } from "@std/streams/text-line-stream";
 
 const PACKAGE_VERSION = (JSON.parse(
@@ -43,7 +43,7 @@ async function collectResponses(
 }
 
 Deno.test(
-  "server --stdio accepts legacy initialize and submits a content-addressed netlist",
+  "server --stdio accepts legacy initialize and submits a netlist without a client-computed hash",
   async () => {
     const storeDir = await Deno.makeTempDir({ prefix: "mcp-spice-stdio-store-" });
     const server = new Deno.Command(Deno.execPath(), {
@@ -83,7 +83,7 @@ Deno.test(
         method: "tools/call",
         params: {
           name: "ngspice_netlist_submit",
-          arguments: { netlist, netlist_sha256: netlistSha256 },
+          arguments: { netlist },
         },
       });
 
@@ -104,6 +104,77 @@ Deno.test(
       server.kill("SIGTERM");
       await server.status;
       await Deno.remove(storeDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "server --stdio maps an unsafe selector to a machine-readable MCP tool error",
+  async () => {
+    const server = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-all",
+        new URL("../server.ts", import.meta.url).pathname,
+        "--stdio",
+      ],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "null",
+    }).spawn();
+
+    const writer = server.stdin.getWriter();
+    const send = (message: Record<string, unknown>) =>
+      writer.write(new TextEncoder().encode(JSON.stringify(message) + "\n"));
+    try {
+      await send({
+        jsonrpc: "2.0",
+        id: 10,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "mcp-spice-stdio-test", version: "0" },
+        },
+      });
+      await send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      await send({
+        jsonrpc: "2.0",
+        id: 11,
+        method: "tools/call",
+        params: {
+          name: "spice_simulate_op",
+          arguments: {
+            netlist_sha256: "a".repeat(64),
+            branch_sources: ["Vin); quit"],
+          },
+        },
+      });
+
+      const responses = await collectResponses(server.stdout, 2, 30_000);
+      assertEquals(responses.length, 2);
+      assertEquals(responses[1].id, 11);
+      assertEquals(responses[1].error, undefined);
+      const result = responses[1].result as Record<string, unknown>;
+      assertEquals(result.isError, true);
+      const content = result.content as Array<Record<string, unknown>>;
+      const mapped = JSON.parse(content[0].text as string) as {
+        code: string;
+        context: Record<string, unknown>;
+        recovery: string;
+      };
+      assertEquals(mapped.code, "invalid_source_name");
+      assertEquals(mapped.context.tool, "spice_simulate_op");
+      assertEquals(mapped.context.kind, "source");
+      assert(typeof mapped.recovery === "string" && mapped.recovery.length > 0);
+    } finally {
+      await writer.close();
+      try {
+        server.kill("SIGTERM");
+      } catch {
+        /* process already stopped */
+      }
+      await server.status;
     }
   },
 );

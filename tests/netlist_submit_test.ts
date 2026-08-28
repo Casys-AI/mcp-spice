@@ -47,12 +47,12 @@ function submitTool() {
 
 async function submit(
   netlist: string,
-  sha256?: string,
+  expectedSha256?: string,
 ): Promise<{ sha256: string; bytes: number; uri: string }> {
-  const digest = sha256 ?? await sha256Hex(new TextEncoder().encode(netlist));
+  const args: Record<string, unknown> = { netlist };
+  if (expectedSha256 !== undefined) args.netlist_sha256 = expectedSha256;
   const result = await submitTool().handler({
-    netlist,
-    netlist_sha256: digest,
+    ...args,
   }) as { structuredContent: { sha256: string; bytes: number; uri: string } };
   return result.structuredContent;
 }
@@ -78,6 +78,29 @@ Deno.test("ngspice_netlist_submit is idempotent for identical bytes", async () =
     assertEquals(first.bytes, stored.length);
   });
 });
+
+Deno.test(
+  "ngspice_netlist_submit computes and returns a digest when no expected hash is supplied",
+  async () => {
+    await withStore(async () => {
+      const submitted = await submit(VDIV);
+      const expected = await sha256Hex(new TextEncoder().encode(VDIV));
+      assertEquals(submitted.sha256, expected);
+      assertEquals(submitted.uri, `spice-netlist:sha256:${expected}`);
+    });
+  },
+);
+
+Deno.test(
+  "ngspice_netlist_submit accepts a matching optional expected hash",
+  async () => {
+    await withStore(async () => {
+      const expected = await sha256Hex(new TextEncoder().encode(VDIV));
+      const submitted = await submit(VDIV, expected.toUpperCase());
+      assertEquals(submitted.sha256, expected);
+    });
+  },
+);
 
 Deno.test(
   "ngspice_netlist_submit refuses a malformed declared SHA-256 and writes nothing",

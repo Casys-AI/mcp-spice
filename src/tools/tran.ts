@@ -2,11 +2,11 @@
  * spice_simulate_tran — transient simulation, reduced statistics output.
  *
  * The caller supplies a SPICE netlist (circuit only, no .control block),
- * transient parameters (tstep_s, tstop_s), and a list of node names.  The
- * server writes the .control block with a `tran` command and `wrdata` directed
- * at a server-controlled temp file; the time-series is never returned to the
- * caller.  Instead, per-node statistics (min, max, final) are computed from
- * the wrdata output and returned as a compact structured result.
+ * transient parameters (tstep_s, tstop_s), and requested node and/or
+ * voltage-source branch observables. The server writes the .control block with
+ * a `tran` command and `wrdata` directed at a server-controlled temp file; the
+ * time-series is never returned to the caller. Instead, reduced extrema and
+ * final summaries are computed from the private output.
  *
  * Security: same netlist validation as spice_simulate_op.
  *
@@ -14,8 +14,13 @@
  */
 
 import { resolveSimulationNetlist } from "../api/netlist-resolve.ts";
-import { validateNetlistSecurity } from "../api/netlist-security.ts";
+import {
+  validateNetlistSecurity,
+  validateNodeName,
+  validateSourceName,
+} from "../api/netlist-security.ts";
 import { runNgspiceTran } from "../api/ngspice.ts";
+import { SpiceToolError } from "../api/tool-error.ts";
 import type { SpiceTool } from "./types.ts";
 
 const TOOL_NAME = "spice_simulate_tran";
@@ -26,14 +31,20 @@ const NOT_CHECKED = [
   "Initial conditions: the server-owned transient command does not expose UIC; ngspice computes a DC operating point before the transient.",
   "Monte Carlo / worst-case analysis is not performed.",
   "Non-linear component models require .model definitions embedded in the netlist; no model library is provided by this server.",
-  "Branch currents are not returned; only node voltages are extracted.",
-  "The complete time series is never returned; only min/max/final per node.",
+  "Branch currents are extracted only for voltage sources explicitly named in branch_sources; raw ngspice i(Vsource) is positive into the source positive terminal.",
+  "For min/max ties, the earliest sampled time is returned. The complete time series is never returned; only reduced statistics are returned.",
 ];
+
+const MAX_OBSERVABLES_PER_KIND = 32;
 
 const INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: ["netlist_sha256", "tstep_s", "tstop_s", "nodes"],
+  required: ["netlist_sha256", "tstep_s", "tstop_s"],
+  anyOf: [
+    { required: ["nodes"] },
+    { required: ["branch_sources"] },
+  ],
   properties: {
     netlist_path: {
       type: "string",
@@ -68,10 +79,20 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     nodes: {
       type: "array",
       minItems: 1,
+      maxItems: MAX_OBSERVABLES_PER_KIND,
       items: { type: "string" },
       description:
-        'Node names whose transient statistics are requested (e.g. ["out", "vdd"]). ' +
-        "Use bare names without the v() wrapper.",
+        'Optional node names whose transient statistics are requested (e.g. ["out", "vdd"]). ' +
+        "Use bare names without the v() wrapper. Pass at least one of nodes or branch_sources.",
+    },
+    branch_sources: {
+      type: "array",
+      minItems: 1,
+      maxItems: MAX_OBSERVABLES_PER_KIND,
+      items: { type: "string" },
+      description:
+        'Optional voltage-source names whose raw i(Vsource) transient summaries are requested (e.g. ["Vin"]). ' +
+        "Positive current is into the source positive terminal. Pass at least one of nodes or branch_sources.",
     },
     timeout_s: {
       type: "number",
@@ -85,6 +106,7 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
   required: [
     "node_stats",
+    "branch_current_stats_a",
     "measurements",
     "simulation",
     "not_checked",
@@ -93,16 +115,66 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
   properties: {
     node_stats: {
       type: "object",
-      description: "Node name → {min_v, max_v, final_v} in volts, " +
-        "computed over the full transient window.",
+      description:
+        "Node name → reduced voltage statistics over the full transient window. " +
+        "Extrema timestamps use seconds and resolve equal values to the earliest sample.",
       additionalProperties: {
         type: "object",
         additionalProperties: false,
-        required: ["min_v", "max_v", "final_v"],
+        required: [
+          "min_v",
+          "max_v",
+          "final_v",
+          "min_at_s",
+          "max_at_s",
+          "final_at_s",
+        ],
         properties: {
-          min_v: { type: "number" },
-          max_v: { type: "number" },
-          final_v: { type: "number" },
+          min_v: { type: "number", description: "Minimum voltage in volts." },
+          max_v: { type: "number", description: "Maximum voltage in volts." },
+          final_v: { type: "number", description: "Final sampled voltage in volts." },
+          min_at_s: {
+            type: "number",
+            description: "Earliest minimum time in seconds.",
+          },
+          max_at_s: {
+            type: "number",
+            description: "Earliest maximum time in seconds.",
+          },
+          final_at_s: { type: "number", description: "Final sample time in seconds." },
+        },
+      },
+    },
+    branch_current_stats_a: {
+      type: "object",
+      description:
+        "Voltage-source name → reduced raw ngspice i(Vsource) current statistics in amperes. " +
+        "Positive current is into the source positive terminal; a delivering source normally appears negative. " +
+        "Empty when branch_sources is omitted.",
+      additionalProperties: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "min_a",
+          "max_a",
+          "final_a",
+          "min_at_s",
+          "max_at_s",
+          "final_at_s",
+        ],
+        properties: {
+          min_a: { type: "number", description: "Minimum current in amperes." },
+          max_a: { type: "number", description: "Maximum current in amperes." },
+          final_a: { type: "number", description: "Final sampled current in amperes." },
+          min_at_s: {
+            type: "number",
+            description: "Earliest minimum time in seconds.",
+          },
+          max_at_s: {
+            type: "number",
+            description: "Earliest maximum time in seconds.",
+          },
+          final_at_s: { type: "number", description: "Final sample time in seconds." },
         },
       },
     },
@@ -157,9 +229,10 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
 export const tranTool: SpiceTool = {
   name: TOOL_NAME,
   description: "Run an ngspice transient (.tran) simulation on a caller-supplied " +
-    "circuit netlist (no .control block) and return per-node statistics " +
-    "(min, max, final voltage) over the full transient window. " +
-    "The full time series is never returned — only reduced statistics. " +
+    "circuit netlist (no .control block) and return requested node-voltage and " +
+    "voltage-source-current statistics (min, max, final plus timestamps) over " +
+    "the full transient window. The full time series is never returned — only " +
+    "reduced statistics. " +
     "The server writes the .control block and validates the netlist for " +
     "forbidden directives before running. " +
     "The tool measures; it does not declare circuit compliance.",
@@ -173,34 +246,31 @@ export const tranTool: SpiceTool = {
     openWorldHint: false,
   },
   handler: async (args: Record<string, unknown>) => {
-    const tstep_s = args["tstep_s"];
-    if (typeof tstep_s !== "number" || !isFinite(tstep_s) || tstep_s <= 0) {
-      throw new TypeError(`[${TOOL_NAME}] tstep_s must be a positive finite number.`);
-    }
-
-    const tstop_s = args["tstop_s"];
-    if (typeof tstop_s !== "number" || !isFinite(tstop_s) || tstop_s <= 0) {
-      throw new TypeError(`[${TOOL_NAME}] tstop_s must be a positive finite number.`);
-    }
-
+    const tstep_s = requirePositiveFinite(args["tstep_s"], "tstep_s");
+    const tstop_s = requirePositiveFinite(args["tstop_s"], "tstop_s");
     if (tstep_s >= tstop_s) {
-      throw new TypeError(
-        `[${TOOL_NAME}] tstep_s (${tstep_s}) must be less than tstop_s (${tstop_s}).`,
+      throw new SpiceToolError(
+        "invalid_transient_window",
+        { toolName: TOOL_NAME, tstep_s, tstop_s },
+        "Pass tstep_s smaller than tstop_s, both in seconds.",
       );
     }
 
-    const nodesRaw = args["nodes"];
-    if (!Array.isArray(nodesRaw) || nodesRaw.length === 0) {
-      throw new TypeError(
-        `[${TOOL_NAME}] nodes must be a non-empty array of node names.`,
+    const nodes = readNameList(args["nodes"], "nodes", "node");
+    const branchSources = readNameList(
+      args["branch_sources"],
+      "branch_sources",
+      "source",
+    );
+    if (nodes.length === 0 && branchSources.length === 0) {
+      throw new SpiceToolError(
+        "missing_observables",
+        { toolName: TOOL_NAME },
+        "Pass at least one node in nodes or voltage-source name in branch_sources.",
       );
     }
-    const nodes = nodesRaw.map((n) => {
-      if (typeof n !== "string") {
-        throw new TypeError(`[${TOOL_NAME}] Each node name must be a string.`);
-      }
-      return n;
-    });
+    for (const node of nodes) validateNodeName(node, TOOL_NAME);
+    for (const source of branchSources) validateSourceName(source, TOOL_NAME);
 
     const rawTimeout = args["timeout_s"];
     const timeoutMs = typeof rawTimeout === "number"
@@ -222,6 +292,7 @@ export const tranTool: SpiceTool = {
         tstop_s,
         nodes,
         timeoutMs,
+        branchSources,
       );
 
       // 4. Build cross-tool measurements alias (final_v per node).
@@ -230,21 +301,12 @@ export const tranTool: SpiceTool = {
         measurements[node] = { value: stats.final_v };
       }
 
-      const summary = nodes
-        .map((n) => {
-          const s = result.nodeStats[n];
-          return s
-            ? `${n}=[${s.min_v.toExponential(3)},${s.max_v.toExponential(3)}] final=${
-              s.final_v.toExponential(3)
-            } V`
-            : `${n}=missing`;
-        })
-        .join(", ");
-
       return {
-        content: `[${TOOL_NAME}] sha256:${snapshot.artifact.sha256}: ${summary}`,
+        content:
+          `[${TOOL_NAME}] sha256:${snapshot.artifact.sha256}: reduced transient summaries; full time series not returned`,
         structuredContent: {
           node_stats: result.nodeStats,
+          branch_current_stats_a: result.branchCurrentStats,
           measurements,
           simulation: {
             n_points: result.nPoints,
@@ -263,3 +325,41 @@ export const tranTool: SpiceTool = {
     }
   },
 };
+
+function requirePositiveFinite(raw: unknown, field: "tstep_s" | "tstop_s"): number {
+  if (typeof raw !== "number" || !isFinite(raw) || raw <= 0) {
+    throw new SpiceToolError(
+      `invalid_${field}`,
+      { toolName: TOOL_NAME, [field]: raw },
+      `Pass ${field} as a positive finite number of seconds.`,
+    );
+  }
+  return raw;
+}
+
+function readNameList(
+  raw: unknown,
+  field: "nodes" | "branch_sources",
+  itemLabel: "node" | "source",
+): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (
+    !Array.isArray(raw) || raw.length === 0 || raw.length > MAX_OBSERVABLES_PER_KIND
+  ) {
+    throw new SpiceToolError(
+      `invalid_${field}`,
+      { toolName: TOOL_NAME, [field]: raw, maxItems: MAX_OBSERVABLES_PER_KIND },
+      `Pass ${field} as a non-empty array of at most ${MAX_OBSERVABLES_PER_KIND} ${itemLabel} names.`,
+    );
+  }
+  return raw.map((item) => {
+    if (typeof item !== "string") {
+      throw new SpiceToolError(
+        `invalid_${field}`,
+        { toolName: TOOL_NAME, [field]: raw },
+        `Pass ${field} as an array of ${itemLabel} name strings.`,
+      );
+    }
+    return item;
+  });
+}
