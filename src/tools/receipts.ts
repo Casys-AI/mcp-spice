@@ -150,18 +150,26 @@ export const resultGetTool: SpiceTool = {
 const DISPATCH_GET_INPUT: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: ["dispatch_sha256"],
+  required: ["request_sha256"],
   properties: {
-    dispatch_sha256: { type: "string", description: SHA256_DESCRIPTION },
+    request_sha256: {
+      type: "string",
+      description: "Runtime-independent acknowledged request identity. " +
+        SHA256_DESCRIPTION,
+    },
   },
 };
 
 const DISPATCH_GET_OUTPUT: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: ["dispatch_sha256", "dispatch"],
+  required: ["request_sha256", "dispatch_sha256", "dispatch"],
   properties: {
-    dispatch_sha256: { type: "string" },
+    request_sha256: { type: "string" },
+    dispatch_sha256: {
+      type: "string",
+      description: "Exact complete dispatch-document integrity SHA-256.",
+    },
     dispatch: { type: "object" },
     publication: { type: "object" },
   },
@@ -169,7 +177,8 @@ const DISPATCH_GET_OUTPUT: Record<string, unknown> = {
 
 export const dispatchGetTool: SpiceTool = {
   name: "spice_simulation_dispatch_get",
-  description: "Read a durable provider dispatch by SHA-256 for recovery. " +
+  description:
+    "Read a durable provider dispatch by acknowledged request SHA-256 for recovery. " +
     "An acknowledged dispatch with no publication is deliberately uncertain: " +
     "do not request an automatic rerun. This record is documentary only.",
   category: "artifact",
@@ -182,19 +191,20 @@ export const dispatchGetTool: SpiceTool = {
     openWorldHint: false,
   },
   handler: async (args) => {
-    const dispatch_sha256 = requireDigest(
+    const request_sha256 = requireDigest(
       args,
-      "dispatch_sha256",
+      "request_sha256",
       "spice_simulation_dispatch_get",
     );
-    const state = await getSimulationDispatch(dispatch_sha256);
+    const state = await getSimulationDispatch(request_sha256);
     return {
       content:
-        `[spice_simulation_dispatch_get] dispatch_sha256:${dispatch_sha256} state:${
+        `[spice_simulation_dispatch_get] request_sha256:${request_sha256} state:${
           state.publication ? "published" : "acknowledged"
         }`,
       structuredContent: {
-        dispatch_sha256,
+        request_sha256,
+        dispatch_sha256: state.dispatch.integrity_sha256,
         dispatch: state.dispatch,
         ...(state.publication === undefined ? {} : { publication: state.publication }),
       },

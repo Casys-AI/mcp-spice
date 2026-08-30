@@ -102,7 +102,7 @@ export async function putNetlistBytes(
 
   // Filename is the recomputed digest — never a caller-declared hash.
   const sha256 = await sha256Hex(bytes);
-  await Deno.mkdir(storeDir, { recursive: true });
+  await ensureDurableStoreDirectory(storeDir);
   const dest = join(storeDir, sha256);
   const tmp = join(storeDir, `.tmp-${sha256}-${crypto.randomUUID()}`);
 
@@ -115,6 +115,8 @@ export async function putNetlistBytes(
     await writeAll(temporary, bytes);
     await temporary.sync();
     await Deno.chmod(tmp, 0o400);
+    // Persist chmod metadata as well as data before linking this CAS object.
+    await temporary.sync();
   } finally {
     temporary.close();
   }
@@ -225,6 +227,46 @@ async function writeAll(file: Deno.FsFile, bytes: Uint8Array): Promise<void> {
 
 async function syncDirectoryForPath(path: string): Promise<void> {
   const handle = await Deno.open(dirname(path), { read: true });
+  try {
+    await handle.sync();
+  } finally {
+    handle.close();
+  }
+}
+
+/** Create and durably anchor each new parent before a netlist can be ACKed. */
+async function ensureDurableStoreDirectory(path: string): Promise<void> {
+  try {
+    const info = await Deno.lstat(path);
+    if (!info.isDirectory || info.isSymlink) {
+      throw new SpiceToolError(
+        "netlist_store_directory_invalid",
+        { path },
+        "Restore the netlist store as a real directory before submitting source bytes.",
+      );
+    }
+    return;
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+
+  const parent = dirname(path);
+  if (parent !== path) await ensureDurableStoreDirectory(parent);
+  try {
+    await Deno.mkdir(path);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
+  }
+  const info = await Deno.lstat(path);
+  if (!info.isDirectory || info.isSymlink) {
+    throw new SpiceToolError(
+      "netlist_store_directory_invalid",
+      { path },
+      "Restore the netlist store as a real directory before submitting source bytes.",
+    );
+  }
+  await syncDirectoryForPath(path);
+  const handle = await Deno.open(path, { read: true });
   try {
     await handle.sync();
   } finally {

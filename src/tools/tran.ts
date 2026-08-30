@@ -240,6 +240,7 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
         "Documentary provider receipt reference. It is not Digital Thread product evidence or a requirement verdict.",
       additionalProperties: false,
       required: [
+        "request_sha256",
         "dispatch_sha256",
         "receipt_sha256",
         "outcome_sha256",
@@ -247,6 +248,7 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
         "documentary_only",
       ],
       properties: {
+        request_sha256: { type: "string" },
         dispatch_sha256: { type: "string" },
         receipt_sha256: { type: "string" },
         outcome_sha256: { type: "string" },

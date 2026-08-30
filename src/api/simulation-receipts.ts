@@ -6,10 +6,11 @@
  *
  *   dispatch (acknowledged) -> result -> receipt -> publication
  *
- * Results and receipts are canonical JSON, addressed by SHA-256 of their
- * exact UTF-8 bytes, and written once. Dispatches and publications are
- * append-only records keyed by the canonical requested work so an uncertain
- * acknowledgement remains visible even if the runtime changes after restart.
+ * Results and receipts are canonical JSON addressed by their exact SHA-256.
+ * The acknowledgement file is instead keyed by a canonical request SHA-256,
+ * while its verified integrity SHA-256 binds the complete provider/runtime/
+ * budget document. Thus a runtime upgrade cannot silently retry an ACK-only
+ * request, and a bit flip in its runtime remains detectable.
  * The dispatch is intentionally published before ngspice starts. A later
  * process that sees an acknowledged dispatch without its publication must fail
  * closed: it cannot know whether the process was interrupted before, during,
@@ -26,7 +27,7 @@ import { getNetlistPath } from "./netlist-store.ts";
 import { NgspiceNotFoundError } from "./ngspice.ts";
 import { isMachineReadableError, SpiceToolError } from "./tool-error.ts";
 
-export const MCP_SPICE_VERSION = "0.5.2";
+export const MCP_SPICE_VERSION = "0.6.0";
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const MAX_RUNTIME_IDENTITY_BYTES = 8 * 1024;
@@ -52,15 +53,19 @@ export interface RuntimeIdentity extends JsonRecord {
 
 export interface SimulationDispatch extends JsonRecord {
   type: "spice-simulation-dispatch/1.0";
+  request_sha256: string;
   analysis_kind: AnalysisKind;
   netlist_sha256: string;
   normalized_request: JsonRecord;
   runtime_identity: RuntimeIdentity;
   execution_state: "acknowledged";
+  integrity_sha256: string;
 }
 
 export interface SimulationReceipt extends JsonRecord {
   type: "spice-simulation-receipt/1.0";
+  request_sha256: string;
+  dispatch_sha256: string;
   analysis_kind: AnalysisKind;
   netlist_sha256: string;
   normalized_request: JsonRecord;
@@ -71,13 +76,16 @@ export interface SimulationReceipt extends JsonRecord {
 
 interface SimulationPublication extends JsonRecord {
   type: "spice-simulation-publication/1.0";
+  request_sha256: string;
   dispatch_sha256: string;
   receipt_sha256: string;
   outcome_sha256: string;
   execution_state: SimulationExecutionState;
+  integrity_sha256: string;
 }
 
 export interface DispatchStart {
+  request_sha256: string;
   dispatch_sha256: string;
   dispatch: SimulationDispatch;
   status: "started" | "published";
@@ -87,6 +95,7 @@ export interface DispatchStart {
 }
 
 export interface PublishedSimulation {
+  request_sha256: string;
   dispatch_sha256: string;
   receipt_sha256: string;
   outcome_sha256: string;
@@ -198,66 +207,48 @@ export async function beginSimulationDispatch(input: {
   runtime_identity: RuntimeIdentity;
 }): Promise<DispatchStart> {
   const analysisKind = assertAnalysisKind(input.analysis_kind, "simulation_dispatch");
-  const dispatch: SimulationDispatch = {
-    type: "spice-simulation-dispatch/1.0",
+  const netlistSha256 = normalizeDigest(
+    input.netlist_sha256,
+    "invalid_netlist_sha256",
+    "netlist_sha256",
+  );
+  const normalizedRequest = assertNormalizedRequest(
+    analysisKind,
+    input.normalized_request,
+  );
+  const requestSha256 = await requestIdentity({
     analysis_kind: analysisKind,
-    netlist_sha256: normalizeDigest(
-      input.netlist_sha256,
-      "invalid_netlist_sha256",
-      "netlist_sha256",
-    ),
-    normalized_request: assertNormalizedRequest(
-      analysisKind,
-      input.normalized_request,
-    ),
+    netlist_sha256: netlistSha256,
+    normalized_request: normalizedRequest,
+  });
+  const dispatch = await createDispatch({
+    request_sha256: requestSha256,
+    analysis_kind: analysisKind,
+    netlist_sha256: netlistSha256,
+    normalized_request: normalizedRequest,
     runtime_identity: assertRuntimeIdentity(input.runtime_identity),
-    execution_state: "acknowledged",
-  };
-  const dispatchSha256 = await dispatchIdentity(dispatch);
-  let created = false;
-  try {
-    created = await putImmutableBytes(
-      "dispatches",
-      dispatchSha256,
-      canonicalJsonBytes(dispatch),
-    );
-  } catch (error) {
-    // The requested work identity intentionally excludes runtime identity.
-    // A previous dispatch on a different runtime is still the same request for
-    // fail-closed recovery purposes; inspect it below rather than overwriting
-    // it or launching a new provider process.
-    if (
-      !(error instanceof SpiceToolError) ||
-      error.code !== "simulation_immutable_record_conflict"
-    ) {
-      throw error;
-    }
-  }
+  });
+  const acknowledgement = await acknowledgeDispatch(requestSha256, dispatch);
+  const storedDispatch = acknowledgement.dispatch;
 
-  if (created) {
-    await assertDispatchIdentity(
-      dispatchSha256,
-      assertDispatch(await readDocument("dispatches", dispatchSha256)),
-    );
+  if (acknowledgement.created) {
     return {
-      dispatch_sha256: dispatchSha256,
-      dispatch,
+      request_sha256: requestSha256,
+      dispatch_sha256: storedDispatch.integrity_sha256,
+      dispatch: storedDispatch,
       status: "started",
     };
   }
 
-  const existingDispatch = assertDispatch(
-    await readDocument("dispatches", dispatchSha256),
-  );
-  await assertDispatchIdentity(dispatchSha256, existingDispatch);
-  const publication = await waitForPublication(dispatchSha256);
+  const publication = await waitForPublication(requestSha256);
   if (publication === undefined) {
-    throw uncertainDispatchError(dispatchSha256);
+    throw uncertainDispatchError(requestSha256, storedDispatch.integrity_sha256);
   }
-  await assertPublicationLinks(dispatchSha256, existingDispatch, publication);
+  await assertPublicationLinks(requestSha256, storedDispatch, publication);
   return {
-    dispatch_sha256: dispatchSha256,
-    dispatch: existingDispatch,
+    request_sha256: requestSha256,
+    dispatch_sha256: storedDispatch.integrity_sha256,
+    dispatch: storedDispatch,
     status: "published",
     receipt_sha256: publication.receipt_sha256,
     outcome_sha256: publication.outcome_sha256,
@@ -267,18 +258,18 @@ export async function beginSimulationDispatch(input: {
 
 /** Publish a successful or failed outcome in the required atomic order. */
 export async function publishSimulationOutcome(input: {
-  dispatch_sha256: string;
+  request_sha256: string;
   dispatch: SimulationDispatch;
   execution_state: SimulationExecutionState;
   result: JsonRecord;
 }): Promise<PublishedSimulation> {
-  const dispatchSha = normalizeDigest(
-    input.dispatch_sha256,
-    "invalid_dispatch_sha256",
-    "dispatch_sha256",
+  const requestSha = normalizeDigest(
+    input.request_sha256,
+    "invalid_request_sha256",
+    "request_sha256",
   );
-  const dispatch = assertDispatch(await readDocument("dispatches", dispatchSha));
-  await assertDispatchIdentity(dispatchSha, dispatch);
+  const dispatch = assertDispatch(await readDocument("dispatches", requestSha));
+  await assertDispatchRequestIdentity(requestSha, dispatch);
   assertSameCanonicalDocument(dispatch, input.dispatch, "simulation_dispatch_mismatch");
   const executionState = assertExecutionState(input.execution_state);
   const result = assertJsonRecord(input.result, "result");
@@ -289,6 +280,8 @@ export async function publishSimulationOutcome(input: {
   const outcome = await putDocument("results", result);
   const receipt: SimulationReceipt = {
     type: "spice-simulation-receipt/1.0",
+    request_sha256: requestSha,
+    dispatch_sha256: dispatch.integrity_sha256,
     analysis_kind: dispatch.analysis_kind,
     netlist_sha256: dispatch.netlist_sha256,
     normalized_request: dispatch.normalized_request,
@@ -297,18 +290,19 @@ export async function publishSimulationOutcome(input: {
     execution_state: executionState,
   };
   const receiptRef = await putDocument("receipts", receipt);
-  const publication: SimulationPublication = {
-    type: "spice-simulation-publication/1.0",
-    dispatch_sha256: dispatchSha,
+  const publication = await createPublication({
+    request_sha256: requestSha,
+    dispatch_sha256: dispatch.integrity_sha256,
     receipt_sha256: receiptRef.sha256,
     outcome_sha256: outcome.sha256,
     execution_state: executionState,
-  };
-  await putPublication(dispatchSha, publication);
-  await assertPublicationLinks(dispatchSha, dispatch, publication);
+  });
+  await putPublication(requestSha, publication);
+  await assertPublicationLinks(requestSha, dispatch, publication);
 
   return {
-    dispatch_sha256: dispatchSha,
+    request_sha256: requestSha,
+    dispatch_sha256: dispatch.integrity_sha256,
     receipt_sha256: receiptRef.sha256,
     outcome_sha256: outcome.sha256,
     execution_state: executionState,
@@ -335,6 +329,20 @@ export async function getSimulationReceipt(
     "receipt_sha256",
   );
   const receipt = assertReceipt(await readDocument("receipts", digest));
+  const dispatch = assertDispatch(
+    await readDocument("dispatches", receipt.request_sha256),
+  );
+  await assertDispatchRequestIdentity(receipt.request_sha256, dispatch);
+  if (
+    receipt.dispatch_sha256 !== dispatch.integrity_sha256 ||
+    receipt.analysis_kind !== dispatch.analysis_kind ||
+    receipt.netlist_sha256 !== dispatch.netlist_sha256 ||
+    canonicalJson(receipt.normalized_request) !==
+      canonicalJson(dispatch.normalized_request) ||
+    canonicalJson(receipt.runtime_identity) !== canonicalJson(dispatch.runtime_identity)
+  ) {
+    throw corruptRecordError("receipts", digest, "dispatch_binding_mismatch");
+  }
   await assertNetlistBinding(receipt.netlist_sha256);
   await getSimulationResult(receipt.outcome_sha256);
   return receipt;
@@ -345,24 +353,25 @@ export async function getSimulationReceipt(
  * no publication remains acknowledged; callers must investigate it outside
  * this provider rather than request an automatic replay.
  */
-export async function getSimulationDispatch(dispatchSha256: string): Promise<{
+export async function getSimulationDispatch(requestSha256: string): Promise<{
   dispatch: SimulationDispatch;
   publication?: PublishedSimulation;
 }> {
   const digest = normalizeDigest(
-    dispatchSha256,
-    "invalid_dispatch_sha256",
-    "dispatch_sha256",
+    requestSha256,
+    "invalid_request_sha256",
+    "request_sha256",
   );
   const dispatch = assertDispatch(await readDocument("dispatches", digest));
-  await assertDispatchIdentity(digest, dispatch);
+  await assertDispatchRequestIdentity(digest, dispatch);
   const publication = await readPublicationIfPresent(digest);
   if (publication === undefined) return { dispatch };
   await assertPublicationLinks(digest, dispatch, publication);
   return {
     dispatch,
     publication: {
-      dispatch_sha256: digest,
+      request_sha256: digest,
+      dispatch_sha256: dispatch.integrity_sha256,
       receipt_sha256: publication.receipt_sha256,
       outcome_sha256: publication.outcome_sha256,
       execution_state: publication.execution_state,
@@ -371,7 +380,10 @@ export async function getSimulationDispatch(dispatchSha256: string): Promise<{
 }
 
 /** Convert a persisted typed failure back into an MCP business error. */
-export function throwPersistedSimulationFailure(result: JsonRecord): never {
+export function throwPersistedSimulationFailure(
+  result: JsonRecord,
+  publication?: PublishedSimulation,
+): never {
   const code = result["code"];
   const context = result["context"];
   const recovery = result["recovery"];
@@ -385,7 +397,18 @@ export function throwPersistedSimulationFailure(result: JsonRecord): never {
       "Inspect the documentary receipt and durable result before deciding whether a new, distinct request is appropriate.",
     );
   }
-  throw new SpiceToolError(code, context, recovery);
+  throw new SpiceToolError(
+    code,
+    publication === undefined ? context : {
+      ...context,
+      request_sha256: publication.request_sha256,
+      dispatch_sha256: publication.dispatch_sha256,
+      receipt_sha256: publication.receipt_sha256,
+      outcome_sha256: publication.outcome_sha256,
+      execution_state: publication.execution_state,
+    },
+    recovery,
+  );
 }
 
 /** A canonical failure result contains only the standard machine-readable envelope. */
@@ -423,7 +446,7 @@ function canonicalJson(value: JsonValue): string {
 }
 
 async function putDocument(
-  namespace: "dispatches" | "results" | "receipts",
+  namespace: "results" | "receipts",
   document: JsonRecord,
 ): Promise<{ sha256: string; created: boolean }> {
   const bytes = canonicalJsonBytes(document);
@@ -433,13 +456,45 @@ async function putDocument(
   return { sha256, created };
 }
 
+/**
+ * The request-keyed dispatch is the acknowledgement point. A conflicting
+ * complete-runtime document belongs to the same request and must be reopened,
+ * never replaced or re-dispatched under a later runtime.
+ */
+async function acknowledgeDispatch(
+  requestSha256: string,
+  dispatch: SimulationDispatch,
+): Promise<{ created: boolean; dispatch: SimulationDispatch }> {
+  const bytes = canonicalJsonBytes(dispatch);
+  let created = false;
+  try {
+    created = await putImmutableBytes("dispatches", requestSha256, bytes);
+  } catch (error) {
+    if (
+      !(error instanceof SpiceToolError) ||
+      error.code !== "simulation_immutable_record_conflict"
+    ) {
+      throw error;
+    }
+  }
+  const stored = assertDispatch(
+    await readDocument("dispatches", requestSha256),
+  );
+  await assertDispatchRequestIdentity(requestSha256, stored);
+  if (created) {
+    assertSameCanonicalDocument(stored, dispatch, "simulation_dispatch_conflict");
+  }
+  return { created, dispatch: stored };
+}
+
 async function putPublication(
-  dispatchSha256: string,
+  requestSha256: string,
   publication: SimulationPublication,
 ): Promise<void> {
   const bytes = canonicalJsonBytes(publication);
-  await putImmutableBytes("publications", dispatchSha256, bytes);
-  const stored = assertPublication(await readDocument("publications", dispatchSha256));
+  await putImmutableBytes("publications", requestSha256, bytes);
+  const stored = assertPublication(await readDocument("publications", requestSha256));
+  await assertPublicationIntegrity(stored);
   assertSameCanonicalDocument(stored, publication, "simulation_publication_conflict");
 }
 
@@ -449,7 +504,7 @@ async function putImmutableBytes(
   bytes: Uint8Array,
 ): Promise<boolean> {
   const dir = join(resolveReceiptStoreDir(), namespace);
-  await Deno.mkdir(dir, { recursive: true });
+  await ensureDurableDirectory(dir);
   const destination = join(dir, name);
   const temporary = join(dir, `.tmp-${name}-${crypto.randomUUID()}`);
   const temporaryFile = await Deno.open(temporary, {
@@ -461,6 +516,9 @@ async function putImmutableBytes(
     await writeAll(temporaryFile, bytes);
     await temporaryFile.sync();
     await Deno.chmod(temporary, 0o400);
+    // chmod changes inode metadata; make that permission state durable before
+    // its link can become the immutable public object.
+    await temporaryFile.sync();
   } finally {
     temporaryFile.close();
   }
@@ -490,10 +548,26 @@ async function readDocument(
   namespace: "dispatches" | "results" | "receipts" | "publications",
   identity: string,
 ): Promise<JsonRecord> {
-  const path = join(resolveReceiptStoreDir(), namespace, identity);
+  const storeDir = resolveReceiptStoreDir();
+  const path = join(storeDir, namespace, identity);
   let bytes: Uint8Array;
   try {
+    const info = await Deno.lstat(path);
+    if (!info.isFile || info.isSymlink) {
+      throw corruptRecordError(namespace, identity, "not_regular_file");
+    }
+    const [realStoreDir, realPath] = await Promise.all([
+      Deno.realPath(storeDir),
+      Deno.realPath(path),
+    ]);
+    if (realPath !== join(realStoreDir, namespace, identity)) {
+      throw corruptRecordError(namespace, identity, "outside_store_root");
+    }
     bytes = await Deno.readFile(path);
+    const after = await Deno.lstat(path);
+    if (!after.isFile || after.isSymlink || await Deno.realPath(path) !== realPath) {
+      throw corruptRecordError(namespace, identity, "changed_during_read");
+    }
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
       throw new SpiceToolError(
@@ -540,10 +614,14 @@ async function readDocument(
 }
 
 async function readPublicationIfPresent(
-  dispatchSha256: string,
+  requestSha256: string,
 ): Promise<SimulationPublication | undefined> {
   try {
-    return assertPublication(await readDocument("publications", dispatchSha256));
+    const publication = assertPublication(
+      await readDocument("publications", requestSha256),
+    );
+    await assertPublicationIntegrity(publication);
+    return publication;
   } catch (error) {
     if (
       error instanceof SpiceToolError &&
@@ -556,11 +634,11 @@ async function readPublicationIfPresent(
 }
 
 async function waitForPublication(
-  dispatchSha256: string,
+  requestSha256: string,
 ): Promise<SimulationPublication | undefined> {
   const deadline = Date.now() + ACKNOWLEDGED_PUBLICATION_WAIT_MS;
   while (true) {
-    const publication = await readPublicationIfPresent(dispatchSha256);
+    const publication = await readPublicationIfPresent(requestSha256);
     if (publication !== undefined || Date.now() >= deadline) return publication;
     await new Promise((resolve) =>
       setTimeout(resolve, ACKNOWLEDGED_PUBLICATION_POLL_MS)
@@ -569,12 +647,15 @@ async function waitForPublication(
 }
 
 async function assertPublicationLinks(
-  dispatchSha256: string,
+  requestSha256: string,
   dispatch: SimulationDispatch,
   publication: SimulationPublication,
 ): Promise<void> {
-  if (publication.dispatch_sha256 !== dispatchSha256) {
-    throw corruptRecordError("publications", dispatchSha256, "dispatch_mismatch");
+  if (
+    publication.request_sha256 !== requestSha256 ||
+    publication.dispatch_sha256 !== dispatch.integrity_sha256
+  ) {
+    throw corruptRecordError("publications", requestSha256, "dispatch_mismatch");
   }
   const receipt = assertReceipt(
     await readDocument("receipts", publication.receipt_sha256),
@@ -582,6 +663,8 @@ async function assertPublicationLinks(
   await assertNetlistBinding(receipt.netlist_sha256);
   const result = await getSimulationResult(publication.outcome_sha256);
   if (
+    receipt.request_sha256 !== requestSha256 ||
+    receipt.dispatch_sha256 !== dispatch.integrity_sha256 ||
     receipt.analysis_kind !== dispatch.analysis_kind ||
     receipt.netlist_sha256 !== dispatch.netlist_sha256 ||
     receipt.outcome_sha256 !== publication.outcome_sha256 ||
@@ -592,7 +675,7 @@ async function assertPublicationLinks(
   ) {
     throw corruptRecordError(
       "publications",
-      dispatchSha256,
+      requestSha256,
       "receipt_binding_mismatch",
     );
   }
@@ -609,7 +692,7 @@ async function assertPublicationLinks(
       ) {
         throw corruptRecordError(
           "publications",
-          dispatchSha256,
+          requestSha256,
           "failure_result_invalid",
         );
       }
@@ -641,26 +724,76 @@ async function assertNetlistBinding(netlistSha256: string): Promise<void> {
   }
 }
 
-/**
- * This identifier intentionally excludes runtime identity. It identifies the
- * work requested by the caller, so an acknowledged request cannot be replayed
- * automatically merely because a later restart has a different runtime.
- */
-async function dispatchIdentity(dispatch: SimulationDispatch): Promise<string> {
+async function requestIdentity(input: {
+  analysis_kind: AnalysisKind;
+  netlist_sha256: string;
+  normalized_request: JsonRecord;
+}): Promise<string> {
   return await sha256Hex(canonicalJsonBytes({
     type: "spice-simulation-request/1.0",
-    analysis_kind: dispatch.analysis_kind,
-    netlist_sha256: dispatch.netlist_sha256,
-    normalized_request: dispatch.normalized_request,
+    analysis_kind: input.analysis_kind,
+    netlist_sha256: input.netlist_sha256,
+    normalized_request: input.normalized_request,
   }));
 }
 
-async function assertDispatchIdentity(
-  identity: string,
+async function assertDispatchRequestIdentity(
+  requestSha256: string,
   dispatch: SimulationDispatch,
 ): Promise<void> {
-  if (await dispatchIdentity(dispatch) !== identity) {
-    throw corruptRecordError("dispatches", identity, "request_identity_mismatch");
+  if (
+    dispatch.request_sha256 !== requestSha256 ||
+    await requestIdentity(dispatch) !== requestSha256
+  ) {
+    throw corruptRecordError("dispatches", requestSha256, "request_identity_mismatch");
+  }
+  await assertDispatchIntegrity(dispatch);
+}
+
+async function createDispatch(input: {
+  request_sha256: string;
+  analysis_kind: AnalysisKind;
+  netlist_sha256: string;
+  normalized_request: JsonRecord;
+  runtime_identity: RuntimeIdentity;
+}): Promise<SimulationDispatch> {
+  const body: JsonRecord = {
+    type: "spice-simulation-dispatch/1.0",
+    request_sha256: input.request_sha256,
+    analysis_kind: input.analysis_kind,
+    netlist_sha256: input.netlist_sha256,
+    normalized_request: input.normalized_request,
+    runtime_identity: input.runtime_identity,
+    execution_state: "acknowledged",
+  };
+  return {
+    type: "spice-simulation-dispatch/1.0",
+    request_sha256: input.request_sha256,
+    analysis_kind: input.analysis_kind,
+    netlist_sha256: input.netlist_sha256,
+    normalized_request: input.normalized_request,
+    runtime_identity: input.runtime_identity,
+    execution_state: "acknowledged",
+    integrity_sha256: await sha256Hex(canonicalJsonBytes(body)),
+  };
+}
+
+async function assertDispatchIntegrity(dispatch: SimulationDispatch): Promise<void> {
+  const body: JsonRecord = {
+    type: dispatch.type,
+    request_sha256: dispatch.request_sha256,
+    analysis_kind: dispatch.analysis_kind,
+    netlist_sha256: dispatch.netlist_sha256,
+    normalized_request: dispatch.normalized_request,
+    runtime_identity: dispatch.runtime_identity,
+    execution_state: dispatch.execution_state,
+  };
+  if (await sha256Hex(canonicalJsonBytes(body)) !== dispatch.integrity_sha256) {
+    throw corruptRecordError(
+      "dispatches",
+      dispatch.request_sha256,
+      "integrity_sha256_mismatch",
+    );
   }
 }
 
@@ -669,11 +802,13 @@ function assertDispatch(value: JsonRecord): SimulationDispatch {
     value,
     [
       "type",
+      "request_sha256",
       "analysis_kind",
       "netlist_sha256",
       "normalized_request",
       "runtime_identity",
       "execution_state",
+      "integrity_sha256",
     ],
     "simulation_dispatch_invalid",
   );
@@ -693,6 +828,11 @@ function assertDispatch(value: JsonRecord): SimulationDispatch {
   );
   return {
     type: "spice-simulation-dispatch/1.0",
+    request_sha256: normalizeDigest(
+      value["request_sha256"],
+      "simulation_dispatch_invalid",
+      "request_sha256",
+    ),
     analysis_kind: analysisKind,
     netlist_sha256: normalizeDigest(
       value["netlist_sha256"],
@@ -705,6 +845,11 @@ function assertDispatch(value: JsonRecord): SimulationDispatch {
     ),
     runtime_identity: assertRuntimeIdentity(value["runtime_identity"]),
     execution_state: "acknowledged",
+    integrity_sha256: normalizeDigest(
+      value["integrity_sha256"],
+      "simulation_dispatch_invalid",
+      "integrity_sha256",
+    ),
   };
 }
 
@@ -713,6 +858,8 @@ function assertReceipt(value: JsonRecord): SimulationReceipt {
     value,
     [
       "type",
+      "request_sha256",
+      "dispatch_sha256",
       "analysis_kind",
       "netlist_sha256",
       "normalized_request",
@@ -732,6 +879,16 @@ function assertReceipt(value: JsonRecord): SimulationReceipt {
   const analysisKind = assertAnalysisKind(value["analysis_kind"], "simulation_receipt");
   return {
     type: "spice-simulation-receipt/1.0",
+    request_sha256: normalizeDigest(
+      value["request_sha256"],
+      "simulation_receipt_invalid",
+      "request_sha256",
+    ),
+    dispatch_sha256: normalizeDigest(
+      value["dispatch_sha256"],
+      "simulation_receipt_invalid",
+      "dispatch_sha256",
+    ),
     analysis_kind: analysisKind,
     netlist_sha256: normalizeDigest(
       value["netlist_sha256"],
@@ -757,10 +914,12 @@ function assertPublication(value: JsonRecord): SimulationPublication {
     value,
     [
       "type",
+      "request_sha256",
       "dispatch_sha256",
       "receipt_sha256",
       "outcome_sha256",
       "execution_state",
+      "integrity_sha256",
     ],
     "simulation_publication_invalid",
   );
@@ -773,6 +932,11 @@ function assertPublication(value: JsonRecord): SimulationPublication {
   }
   return {
     type: "spice-simulation-publication/1.0",
+    request_sha256: normalizeDigest(
+      value["request_sha256"],
+      "simulation_publication_invalid",
+      "request_sha256",
+    ),
     dispatch_sha256: normalizeDigest(
       value["dispatch_sha256"],
       "simulation_publication_invalid",
@@ -789,7 +953,59 @@ function assertPublication(value: JsonRecord): SimulationPublication {
       "outcome_sha256",
     ),
     execution_state: assertExecutionState(value["execution_state"]),
+    integrity_sha256: normalizeDigest(
+      value["integrity_sha256"],
+      "simulation_publication_invalid",
+      "integrity_sha256",
+    ),
   };
+}
+
+async function createPublication(input: {
+  request_sha256: string;
+  dispatch_sha256: string;
+  receipt_sha256: string;
+  outcome_sha256: string;
+  execution_state: SimulationExecutionState;
+}): Promise<SimulationPublication> {
+  const body: JsonRecord = {
+    type: "spice-simulation-publication/1.0",
+    request_sha256: input.request_sha256,
+    dispatch_sha256: input.dispatch_sha256,
+    receipt_sha256: input.receipt_sha256,
+    outcome_sha256: input.outcome_sha256,
+    execution_state: input.execution_state,
+  };
+  return {
+    ...body,
+    type: "spice-simulation-publication/1.0",
+    request_sha256: input.request_sha256,
+    dispatch_sha256: input.dispatch_sha256,
+    receipt_sha256: input.receipt_sha256,
+    outcome_sha256: input.outcome_sha256,
+    execution_state: input.execution_state,
+    integrity_sha256: await sha256Hex(canonicalJsonBytes(body)),
+  };
+}
+
+async function assertPublicationIntegrity(
+  publication: SimulationPublication,
+): Promise<void> {
+  const body: JsonRecord = {
+    type: publication.type,
+    request_sha256: publication.request_sha256,
+    dispatch_sha256: publication.dispatch_sha256,
+    receipt_sha256: publication.receipt_sha256,
+    outcome_sha256: publication.outcome_sha256,
+    execution_state: publication.execution_state,
+  };
+  if (await sha256Hex(canonicalJsonBytes(body)) !== publication.integrity_sha256) {
+    throw corruptRecordError(
+      "publications",
+      publication.dispatch_sha256,
+      "integrity_sha256_mismatch",
+    );
+  }
 }
 
 function assertRuntimeIdentity(value: unknown): RuntimeIdentity {
@@ -994,10 +1210,17 @@ function assertSameCanonicalDocument(
   }
 }
 
-function uncertainDispatchError(dispatchSha256: string): SpiceToolError {
+function uncertainDispatchError(
+  requestSha256: string,
+  dispatchSha256: string,
+): SpiceToolError {
   return new SpiceToolError(
     "simulation_dispatch_uncertain",
-    { dispatch_sha256: dispatchSha256, execution_state: "acknowledged" },
+    {
+      request_sha256: requestSha256,
+      dispatch_sha256: dispatchSha256,
+      execution_state: "acknowledged",
+    },
     "Do not retry this request automatically. Read the dispatch by identity, investigate the acknowledged provider run, then submit a distinct human-authorized request if appropriate.",
   );
 }
@@ -1007,8 +1230,9 @@ function corruptRecordError(
   identity: string,
   reason: string,
 ): SpiceToolError {
+  const recordType = namespace === "dispatches" ? "dispatch" : namespace.slice(0, -1);
   return new SpiceToolError(
-    `simulation_${namespace.slice(0, -1)}_corrupt`,
+    `simulation_${recordType}_corrupt`,
     { identity, reason },
     "Do not use or replay the corrupted durable record. Preserve it for investigation and restore it from an authoritative copy.",
   );
@@ -1057,4 +1281,43 @@ async function syncDirectory(path: string): Promise<void> {
   } finally {
     directory.close();
   }
+}
+
+/**
+ * Create the durable layout one directory at a time. Every first creation
+ * syncs its parent before a record may be acknowledged, so a power loss cannot
+ * leave an acknowledged file reachable through an unsynchronised directory.
+ */
+async function ensureDurableDirectory(path: string): Promise<void> {
+  try {
+    const info = await Deno.lstat(path);
+    if (!info.isDirectory || info.isSymlink) {
+      throw new SpiceToolError(
+        "simulation_store_directory_invalid",
+        { path },
+        "Restore the durable simulation store as a real directory before dispatching a simulation.",
+      );
+    }
+    return;
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+
+  const parent = dirname(path);
+  if (parent !== path) await ensureDurableDirectory(parent);
+  try {
+    await Deno.mkdir(path);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
+  }
+  const info = await Deno.lstat(path);
+  if (!info.isDirectory || info.isSymlink) {
+    throw new SpiceToolError(
+      "simulation_store_directory_invalid",
+      { path },
+      "Restore the durable simulation store as a real directory before dispatching a simulation.",
+    );
+  }
+  await syncDirectory(parent);
+  await syncDirectory(path);
 }

@@ -289,7 +289,7 @@ Deno.test(
       },
     });
     const published = await publishSimulationOutcome({
-      dispatch_sha256: started.dispatch_sha256,
+      request_sha256: started.request_sha256,
       dispatch: started.dispatch,
       execution_state: "succeeded",
       result: {

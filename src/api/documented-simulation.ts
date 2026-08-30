@@ -72,11 +72,18 @@ async function executeDocumentedSimulationOnce<T extends object>(input: {
   if (started.status === "published") {
     const result = await getSimulationResult(started.outcome_sha256!);
     if (started.execution_state === "failed") {
-      throwPersistedSimulationFailure(result);
+      throwPersistedSimulationFailure(result, {
+        request_sha256: started.request_sha256,
+        dispatch_sha256: started.dispatch_sha256,
+        receipt_sha256: started.receipt_sha256!,
+        outcome_sha256: started.outcome_sha256!,
+        execution_state: "failed",
+      });
     }
     return {
       result: result as T,
       documentary_receipt: documentaryReference({
+        request_sha256: started.request_sha256,
         dispatch_sha256: started.dispatch_sha256,
         receipt_sha256: started.receipt_sha256!,
         outcome_sha256: started.outcome_sha256!,
@@ -91,18 +98,19 @@ async function executeDocumentedSimulationOnce<T extends object>(input: {
   } catch (error) {
     const failure = failureResultFromError(error);
     if (failure !== undefined) {
-      await publishSimulationOutcome({
-        dispatch_sha256: started.dispatch_sha256,
+      const publication = await publishSimulationOutcome({
+        request_sha256: started.request_sha256,
         dispatch: started.dispatch,
         execution_state: "failed",
         result: failure,
       });
+      throwPersistedSimulationFailure(failure, publication);
     }
     throw error;
   }
 
   const publication = await publishSimulationOutcome({
-    dispatch_sha256: started.dispatch_sha256,
+    request_sha256: started.request_sha256,
     dispatch: started.dispatch,
     execution_state: "succeeded",
     result: result as JsonRecord,

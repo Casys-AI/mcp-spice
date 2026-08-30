@@ -50,13 +50,41 @@ import {
   publishSimulationOutcome,
 } from "../src/api/simulation-receipts.ts";
 import { allTools } from "../src/tools/mod.ts";
-import { createSpiceServer, parseCli } from "../server.ts";
+import { createSpiceServer, parseCli, SERVER_VERSION } from "../server.ts";
 import * as publicApi from "../mod.ts";
 
 const RUN_NATIVE = Deno.env.get("SPICE_RUN_NATIVE") === "1";
 const PACKAGE_VERSION = (JSON.parse(
   Deno.readTextFileSync(new URL("../deno.json", import.meta.url)),
 ) as { version: string }).version;
+
+Deno.test("deno package and server runtime identities stay lockstep", () => {
+  assertEquals(PACKAGE_VERSION, "0.6.0");
+  assertEquals(SERVER_VERSION, PACKAGE_VERSION);
+  assertEquals(MCP_SPICE_VERSION, SERVER_VERSION);
+});
+
+Deno.test("documentary receipt schemas distinguish request and dispatch identities", () => {
+  for (
+    const name of [
+      "spice_simulate_op",
+      "spice_simulate_tran",
+      "spice_simulate_dc",
+    ]
+  ) {
+    const tool = allTools.find((candidate) => candidate.name === name);
+    assert(tool, `${name} must be registered`);
+    const output = tool.outputSchema as Record<string, unknown>;
+    const properties = output.properties as Record<string, Record<string, unknown>>;
+    const documentary = properties.documentary_receipt as Record<string, unknown>;
+    assertEquals(documentary.additionalProperties, false);
+    const required = documentary.required as string[];
+    assert(required.includes("request_sha256"));
+    assert(required.includes("dispatch_sha256"));
+    assert(required.includes("receipt_sha256"));
+    assert(required.includes("outcome_sha256"));
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Port helper
@@ -214,7 +242,7 @@ Deno.test(
       },
     });
     const published = await publishSimulationOutcome({
-      dispatch_sha256: started.dispatch_sha256,
+      request_sha256: started.request_sha256,
       dispatch: started.dispatch,
       execution_state: "succeeded",
       result: { node_voltages: { in: 1 }, input_artifact: { sha256: netlist.sha256 } },

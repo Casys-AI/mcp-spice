@@ -13,7 +13,8 @@ import { MCP_SPICE_VERSION } from "./src/api/simulation-receipts.ts";
 import { mapSpiceToolError } from "./src/api/tool-error.ts";
 import { SpiceToolsClient } from "./src/client.ts";
 
-const VERSION = MCP_SPICE_VERSION;
+/** Public runtime identity; kept lockstep with deno.json by the test suite. */
+export const SERVER_VERSION = MCP_SPICE_VERSION;
 const DEFAULT_PORT = 3023;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 
@@ -29,7 +30,7 @@ export function createSpiceServer(
 
   const app = new McpApp({
     name: "mcp-spice",
-    version: VERSION,
+    version: SERVER_VERSION,
     transport: "stateless",
     maxConcurrent: 4,
     backpressureStrategy: "queue",

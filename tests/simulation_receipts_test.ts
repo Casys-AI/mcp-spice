@@ -8,6 +8,7 @@ import { configureNetlistStoreDir, putNetlistBytes } from "../src/api/netlist-st
 import {
   beginSimulationDispatch,
   canonicalJsonBytes,
+  captureRuntimeIdentity,
   configureReceiptStoreDir,
   getSimulationDispatch,
   getSimulationReceipt,
@@ -85,7 +86,7 @@ Deno.test("durable receipt and result survive a fresh store configuration", asyn
     assertEquals(first.status, "started");
     const result = successResult(input.netlist_sha256);
     const published = await publishSimulationOutcome({
-      dispatch_sha256: first.dispatch_sha256,
+      request_sha256: first.request_sha256,
       dispatch: first.dispatch,
       execution_state: "succeeded",
       result,
@@ -108,6 +109,7 @@ Deno.test("durable receipt and result survive a fresh store configuration", asyn
       ...input,
     });
     assertEquals(afterRestart.status, "published");
+    assertEquals(afterRestart.request_sha256, first.request_sha256);
     assertEquals(afterRestart.receipt_sha256, published.receipt_sha256);
     assertEquals(afterRestart.outcome_sha256, published.outcome_sha256);
 
@@ -159,8 +161,8 @@ Deno.test("acknowledged partial publication remains uncertain and is never rerun
       SpiceToolError,
     );
     assertEquals(error.code, "simulation_dispatch_uncertain");
-    assertEquals(error.context.dispatch_sha256, first.dispatch_sha256);
-    const dispatch = await getSimulationDispatch(first.dispatch_sha256);
+    assertEquals(error.context.request_sha256, first.request_sha256);
+    const dispatch = await getSimulationDispatch(first.request_sha256);
     assertEquals(dispatch.dispatch.execution_state, "acknowledged");
     assertEquals(dispatch.publication, undefined);
   });
@@ -171,7 +173,7 @@ Deno.test("receipt and result readback fail closed on exact-byte corruption", as
     const input = await start();
     const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
     const published = await publishSimulationOutcome({
-      dispatch_sha256: started.dispatch_sha256,
+      request_sha256: started.request_sha256,
       dispatch: started.dispatch,
       execution_state: "succeeded",
       result: successResult(input.netlist_sha256),
@@ -194,6 +196,119 @@ Deno.test("receipt and result readback fail closed on exact-byte corruption", as
       SpiceToolError,
     );
     assertEquals(receiptError.code, "simulation_receipt_corrupt");
+  });
+});
+
+Deno.test("dispatch runtime and terminal publication corruption fail closed", async () => {
+  await withStores(async (root) => {
+    const input = await start();
+    const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+    await publishSimulationOutcome({
+      request_sha256: started.request_sha256,
+      dispatch: started.dispatch,
+      execution_state: "succeeded",
+      result: successResult(input.netlist_sha256),
+    });
+
+    const publicationPath = join(
+      root,
+      "receipts",
+      "publications",
+      started.request_sha256,
+    );
+    await Deno.chmod(publicationPath, 0o600);
+    const publicationText = await Deno.readTextFile(publicationPath);
+    assert(publicationText.includes('"execution_state":"succeeded"'));
+    await Deno.writeTextFile(
+      publicationPath,
+      publicationText.replace(
+        '"execution_state":"succeeded"',
+        '"execution_state":"failed"',
+      ),
+    );
+    const publicationError = await assertRejects(
+      () => getSimulationDispatch(started.request_sha256),
+      SpiceToolError,
+    );
+    assertEquals(publicationError.code, "simulation_publication_corrupt");
+
+    const dispatchPath = join(
+      root,
+      "receipts",
+      "dispatches",
+      started.request_sha256,
+    );
+    await Deno.chmod(dispatchPath, 0o600);
+    const dispatchText = await Deno.readTextFile(dispatchPath);
+    assert(dispatchText.includes("ngspice test runtime 44.2"));
+    await Deno.writeTextFile(
+      dispatchPath,
+      dispatchText.replace("ngspice test runtime 44.2", "ngspice test runtime 54.2"),
+    );
+    const dispatchError = await assertRejects(
+      () => getSimulationDispatch(started.request_sha256),
+      SpiceToolError,
+    );
+    assertEquals(dispatchError.code, "simulation_dispatch_corrupt");
+  });
+});
+
+Deno.test("readback refuses a documentary symlink outside the durable root", async () => {
+  await withStores(async (root) => {
+    const input = await start();
+    const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+    const dispatchPath = join(
+      root,
+      "receipts",
+      "dispatches",
+      started.request_sha256,
+    );
+    const outside = join(root, "outside-dispatch");
+    await Deno.writeTextFile(outside, await Deno.readTextFile(dispatchPath));
+    await Deno.remove(dispatchPath);
+    await Deno.symlink(outside, dispatchPath);
+    const error = await assertRejects(
+      () => getSimulationDispatch(started.request_sha256),
+      SpiceToolError,
+    );
+    assertEquals(error.code, "simulation_dispatch_corrupt");
+  });
+});
+
+Deno.test("receipt readback verifies the runtime-linked dispatch chain", async () => {
+  await withStores(async (root) => {
+    const input = await start();
+    const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+    const published = await publishSimulationOutcome({
+      request_sha256: started.request_sha256,
+      dispatch: started.dispatch,
+      execution_state: "succeeded",
+      result: successResult(input.netlist_sha256),
+    });
+    const receipt = await getSimulationReceipt(published.receipt_sha256);
+    const ngspice_version = "ngspice forged runtime 99.0";
+    const forged = {
+      ...receipt,
+      runtime_identity: {
+        ...receipt.runtime_identity,
+        ngspice_version,
+        ngspice_version_sha256: await sha256Hex(
+          new TextEncoder().encode(ngspice_version),
+        ),
+      },
+    };
+    const bytes = canonicalJsonBytes(forged);
+    const forgedSha256 = await sha256Hex(bytes);
+    await Deno.writeFile(
+      join(root, "receipts", "receipts", forgedSha256),
+      bytes,
+      { mode: 0o400 },
+    );
+    const error = await assertRejects(
+      () => getSimulationReceipt(forgedSha256),
+      SpiceToolError,
+    );
+    assertEquals(error.code, "simulation_receipt_corrupt");
   });
 });
 
@@ -225,7 +340,7 @@ Deno.test("a terminal typed failure is durable, while a pre-dispatch torn tempor
     const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
     assertEquals(started.status, "started");
     const published = await publishSimulationOutcome({
-      dispatch_sha256: started.dispatch_sha256,
+      request_sha256: started.request_sha256,
       dispatch: started.dispatch,
       execution_state: "failed",
       result: {
@@ -239,6 +354,34 @@ Deno.test("a terminal typed failure is durable, while a pre-dispatch torn tempor
     assertEquals(replay.status, "published");
     assertEquals(replay.execution_state, "failed");
     assertEquals(replay.receipt_sha256, published.receipt_sha256);
+  });
+});
+
+Deno.test("a changed runtime cannot unblock an acknowledged request", async () => {
+  await withStores(async () => {
+    const input = await start();
+    const first = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+    const ngspice_version = "ngspice test runtime 45.0";
+    const runtime_identity: RuntimeIdentity = {
+      ...input.runtime_identity,
+      ngspice_version,
+      ngspice_version_sha256: await sha256Hex(
+        new TextEncoder().encode(ngspice_version),
+      ),
+    };
+    const error = await assertRejects(
+      () =>
+        beginSimulationDispatch({
+          analysis_kind: "op",
+          netlist_sha256: input.netlist_sha256,
+          normalized_request: input.normalized_request,
+          runtime_identity,
+        }),
+      SpiceToolError,
+    );
+    assertEquals(error.code, "simulation_dispatch_uncertain");
+    assertEquals(error.context.request_sha256, first.request_sha256);
+    assertEquals(error.context.dispatch_sha256, first.dispatch_sha256);
   });
 });
 
@@ -275,6 +418,115 @@ Deno.test("in-process duplicate execution is single-flight rather than a second 
         left.documentary_receipt.receipt_sha256,
         right.documentary_receipt.receipt_sha256,
       );
+    } finally {
+      if (priorPath === undefined) Deno.env.delete("PATH");
+      else Deno.env.set("PATH", priorPath);
+      await Deno.remove(binDir, { recursive: true });
+    }
+  });
+});
+
+Deno.test("an ACK-only R1 dispatch after an R2 restart executes zero provider calls", async () => {
+  await withStores(async (root) => {
+    const binDir = await Deno.makeTempDir({ prefix: "spice-fake-ngspice-" });
+    const executable = join(binDir, "ngspice");
+    await Deno.writeTextFile(
+      executable,
+      "#!/bin/sh\nprintf 'ngspice test runtime 44.2\\n'\n",
+    );
+    await Deno.chmod(executable, 0o755);
+    const priorPath = Deno.env.get("PATH");
+    Deno.env.set("PATH", `${binDir}:${priorPath ?? ""}`);
+    try {
+      const input = await start();
+      const runtime_identity = await captureRuntimeIdentity();
+      const acknowledged = await beginSimulationDispatch({
+        analysis_kind: "op",
+        netlist_sha256: input.netlist_sha256,
+        normalized_request: input.normalized_request,
+        runtime_identity,
+      });
+      assertEquals(acknowledged.status, "started");
+      await Deno.writeTextFile(
+        executable,
+        "#!/bin/sh\nprintf 'ngspice test runtime 45.0\\n'\n",
+      );
+      await Deno.chmod(executable, 0o755);
+
+      // Clear process-local configuration to model a new process reopening the
+      // same mounted durable root; no in-flight state can suppress this test.
+      configureReceiptStoreDir(undefined);
+      configureNetlistStoreDir(undefined);
+      configureNetlistStoreDir(join(root, "inputs"));
+      configureReceiptStoreDir(join(root, "receipts"));
+      let executions = 0;
+      const error = await assertRejects(
+        () =>
+          executeDocumentedSimulation({
+            analysis_kind: "op",
+            netlist_sha256: input.netlist_sha256,
+            normalized_request: input.normalized_request,
+            execute: () => {
+              executions += 1;
+              return Promise.resolve({ value: 2 });
+            },
+          }),
+        SpiceToolError,
+      );
+      assertEquals(error.code, "simulation_dispatch_uncertain");
+      assertEquals(error.context.request_sha256, acknowledged.request_sha256);
+      assertEquals(error.context.dispatch_sha256, acknowledged.dispatch_sha256);
+      assertEquals(executions, 0);
+    } finally {
+      if (priorPath === undefined) Deno.env.delete("PATH");
+      else Deno.env.set("PATH", priorPath);
+      await Deno.remove(binDir, { recursive: true });
+    }
+  });
+});
+
+Deno.test("terminal typed failures return durable references and replay without execution", async () => {
+  await withStores(async () => {
+    const binDir = await Deno.makeTempDir({ prefix: "spice-fake-ngspice-" });
+    const executable = join(binDir, "ngspice");
+    await Deno.writeTextFile(
+      executable,
+      "#!/bin/sh\nprintf 'ngspice test runtime 44.2\\n'\n",
+    );
+    await Deno.chmod(executable, 0o755);
+    const priorPath = Deno.env.get("PATH");
+    Deno.env.set("PATH", `${binDir}:${priorPath ?? ""}`);
+    try {
+      const input = await start();
+      let executions = 0;
+      const run = () =>
+        executeDocumentedSimulation({
+          analysis_kind: "op",
+          netlist_sha256: input.netlist_sha256,
+          normalized_request: input.normalized_request,
+          execute: () => {
+            executions += 1;
+            return Promise.reject(
+              new SpiceToolError(
+                "ngspice_timeout",
+                { timeoutMs: 30_000 },
+                "Inspect the circuit before submitting a distinct request.",
+              ),
+            );
+          },
+        });
+      const first = await assertRejects(run, SpiceToolError);
+      assertEquals(first.code, "ngspice_timeout");
+      assertEquals(first.context.execution_state, "failed");
+      assert(typeof first.context.request_sha256 === "string");
+      assert(typeof first.context.dispatch_sha256 === "string");
+      assert(typeof first.context.receipt_sha256 === "string");
+      assert(typeof first.context.outcome_sha256 === "string");
+
+      const replay = await assertRejects(run, SpiceToolError);
+      assertEquals(replay.code, "ngspice_timeout");
+      assertEquals(replay.context, first.context);
+      assertEquals(executions, 1);
     } finally {
       if (priorPath === undefined) Deno.env.delete("PATH");
       else Deno.env.set("PATH", priorPath);
