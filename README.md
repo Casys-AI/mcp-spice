@@ -7,11 +7,11 @@ compact, structured results tied to the exact input bytes.
 [container image](https://github.com/Casys-AI/mcp-spice/pkgs/container/mcp-spice) ·
 [changelog](CHANGELOG.md) · [security policy](SECURITY.md)
 
-**Release status.** This checkout is the `0.6.0` release candidate. The main workflow
-publishes that exact JSR version only after the native ngspice suite passes; the
-subsequent `v0.6.0` tag separately qualifies and publishes the multi-architecture GHCR
-image. The version-pinned commands below become available after those gates pass. For a
-durable deployment, use the immutable OCI index digest reported by GHCR.
+**Release status.** Version `0.6.0` is published on JSR and as a native-gated,
+multi-architecture GHCR image. The immutable OCI index digest is
+`sha256:5991ad186da859b66dda078e0c80ce76765d544c920e38beafa48bba77744873`.
+The main workflow qualified the exact JSR package; the `v0.6.0` tag separately
+qualified and published the image.
 
 Historical 0.3.0 context: that release's JSR package and digest-pinned image had package
 version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant `server/discover`
@@ -44,10 +44,10 @@ it does not decide whether a circuit satisfies a requirement.
 
 ## Quick start
 
-### 0.6.0 Docker image after tag publication
+### Published 0.6.0 Docker image
 
-The `v0.6.0` release workflow builds the image for amd64 and arm64, runs the native
-ngspice suite, and then publishes the version tag below. Its entrypoint is
+The `v0.6.0` release workflow built the image for amd64 and arm64, ran the native
+ngspice suite, and published the digest-pinned image below. Its entrypoint is
 `./docker-entrypoint.sh` and its `CMD` is `http`; the command therefore starts the
 stateless HTTP transport. The image contains Deno 2.9.6 and the tested ngspice 44.2
 baseline. The named volume preserves submitted netlists and documentary simulation
@@ -57,7 +57,7 @@ records across container restarts.
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice:0.6.0 http
+  ghcr.io/casys-ai/mcp-spice@sha256:5991ad186da859b66dda078e0c80ce76765d544c920e38beafa48bba77744873 http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. This repository's native HTTP transport
@@ -75,8 +75,8 @@ curl -sS -X POST http://127.0.0.1:3023/mcp \
 For a raw `tools/call` request, also set `Mcp-Name` to the exact tool name in
 `params.name`. Native stdio clients do not use this HTTP transport envelope.
 
-The version tag identifies the release. Once GHCR reports its OCI index digest, use the
-digest form for a reproducible or production deployment.
+The version tag identifies the release; the digest above is the immutable deployment
+authority.
 
 ### Native stdio from source or published JSR 0.6.0
 
@@ -97,13 +97,12 @@ deno run --allow-all jsr:@casys/mcp-spice@0.6.0/server --stdio
 
 The JSR module also requires an `ngspice` executable on `PATH`.
 
-After tag publication, the 0.6.0 image also runs native stdio when `stdio` is passed to
-Docker:
+The published 0.6.0 image also runs native stdio when `stdio` is passed to Docker:
 
 ```bash
 docker run --rm -i \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice:0.6.0 stdio
+  ghcr.io/casys-ai/mcp-spice@sha256:5991ad186da859b66dda078e0c80ce76765d544c920e38beafa48bba77744873 stdio
 ```
 
 Passing `stdio` overrides the image's `CMD http`; it does not start an HTTP child.
@@ -501,7 +500,7 @@ The present source surface stays deliberately bounded. It exposes an operating p
 transient summaries with timestamps and requested branch currents, and a one-dimensional
 DC source sweep reduced to extrema/final summaries. It does not expose AC analysis,
 noise analysis, Monte Carlo, caller-supplied control scripts, or waveform samples. The
-tag workflow tests this same bounded surface before publishing the 0.6.0 image.
+qualified 0.6.0 image exposes this same bounded surface.
 
 | Area                 | Current behavior                                                                                                            |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -588,8 +587,8 @@ Regenerate engine fixtures only with ngspice available:
 deno run --allow-all scripts/gen_fixtures.ts
 ```
 
-Build a local container from this source checkout. That local tag is not the qualified
-0.6.0 release image:
+Build a local container from this source checkout. That local tag is not the
+digest-pinned published 0.6.0 image:
 
 ```bash
 docker build -t mcp-spice:local .
