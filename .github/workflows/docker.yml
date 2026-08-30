@@ -24,7 +24,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ngspice
 
       - name: Verify source and native release gates
-        run: SPICE_RUN_NATIVE=1 deno task release:check
+        run: NGSPICE_RUNS_DIR="$RUNNER_TEMP/mcp-spice-runs" SPICE_RUN_NATIVE=1 deno task release:check
 
   build-push:
     needs: qualify

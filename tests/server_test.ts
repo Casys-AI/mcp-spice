@@ -14,7 +14,10 @@
  */
 
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
-import { NetlistArtifactError } from "../src/api/netlist-artifact.ts";
+import { join } from "@std/path";
+import { EXECUTION_BUDGETS_VERSION } from "../src/api/execution-budgets.ts";
+import { NetlistArtifactError, sha256Hex } from "../src/api/netlist-artifact.ts";
+import { configureNetlistStoreDir, putNetlistBytes } from "../src/api/netlist-store.ts";
 import { MAX_OBSERVABLES_PER_KIND } from "../src/api/execution-budgets.ts";
 import {
   NetlistSecurityError,
@@ -40,6 +43,12 @@ import {
   mapSpiceToolError,
   SpiceToolError,
 } from "../src/api/tool-error.ts";
+import {
+  beginSimulationDispatch,
+  configureReceiptStoreDir,
+  MCP_SPICE_VERSION,
+  publishSimulationOutcome,
+} from "../src/api/simulation-receipts.ts";
 import { allTools } from "../src/tools/mod.ts";
 import { createSpiceServer, parseCli } from "../server.ts";
 import * as publicApi from "../mod.ts";
@@ -146,7 +155,7 @@ Deno.test(
 );
 
 Deno.test(
-  "mcp-spice tools/list returns submit and the bounded simulation operations",
+  "mcp-spice tools/list returns simulation and documentary readback operations",
   async () => {
     const { app } = createSpiceServer({ logger: () => {} });
     const port = freePort();
@@ -164,8 +173,79 @@ Deno.test(
       assert(tools.some((t) => t.name === "spice_simulate_op"));
       assert(tools.some((t) => t.name === "spice_simulate_tran"));
       assert(tools.some((t) => t.name === "spice_simulate_dc"));
+      assert(tools.some((t) => t.name === "spice_simulation_receipt_get"));
+      assert(tools.some((t) => t.name === "spice_simulation_result_get"));
+      assert(tools.some((t) => t.name === "spice_simulation_dispatch_get"));
     } finally {
       await http.shutdown();
+    }
+  },
+);
+
+Deno.test(
+  "HTTP tools/call reads a durable documentary result by exact identity",
+  async () => {
+    const root = await Deno.makeTempDir({ prefix: "mcp-spice-http-receipts-" });
+    configureNetlistStoreDir(join(root, "inputs"));
+    configureReceiptStoreDir(join(root, "receipts"));
+    const netlist = await putNetlistBytes(
+      new TextEncoder().encode("V1 in 0 1\nR1 in 0 1000\n.end\n"),
+      "http_receipt_test",
+    );
+    const ngspiceVersion = "ngspice http test runtime";
+    const started = await beginSimulationDispatch({
+      analysis_kind: "op",
+      netlist_sha256: netlist.sha256,
+      normalized_request: {
+        nodes: ["in"],
+        branch_sources: [],
+        timeout_s: 30,
+      },
+      runtime_identity: {
+        mcp_spice_version: MCP_SPICE_VERSION,
+        execution_budgets: EXECUTION_BUDGETS_VERSION,
+        deno_version: "2.9.6-test",
+        os: "test",
+        arch: "test",
+        ngspice_version: ngspiceVersion,
+        ngspice_version_sha256: await sha256Hex(
+          new TextEncoder().encode(ngspiceVersion),
+        ),
+      },
+    });
+    const published = await publishSimulationOutcome({
+      dispatch_sha256: started.dispatch_sha256,
+      dispatch: started.dispatch,
+      execution_state: "succeeded",
+      result: { node_voltages: { in: 1 }, input_artifact: { sha256: netlist.sha256 } },
+    });
+
+    const { app } = createSpiceServer({ logger: () => {} });
+    const port = freePort();
+    const http = await app.startHttp({
+      port,
+      hostname: "127.0.0.1",
+      onListen: () => {},
+    });
+    try {
+      const called = await rpc(`http://127.0.0.1:${port}/mcp`, "tools/call", {
+        name: "spice_simulation_result_get",
+        arguments: { outcome_sha256: published.outcome_sha256 },
+      });
+      assertEquals(called.body.error, undefined);
+      const result = called.body.result as Record<string, unknown>;
+      assertEquals(result.isError, undefined);
+      const structured = result.structuredContent as Record<string, unknown>;
+      assertEquals(structured.outcome_sha256, published.outcome_sha256);
+      assertEquals(structured.result, {
+        node_voltages: { in: 1 },
+        input_artifact: { sha256: netlist.sha256 },
+      });
+    } finally {
+      await http.shutdown();
+      configureReceiptStoreDir(undefined);
+      configureNetlistStoreDir(undefined);
+      await Deno.remove(root, { recursive: true });
     }
   },
 );
@@ -196,6 +276,11 @@ Deno.test(
       assert(
         required.includes("measurements"),
         `${tool.name}: outputSchema.required must include "measurements"`,
+      );
+      const properties = schema.properties as Record<string, unknown>;
+      assert(
+        properties.documentary_receipt !== undefined,
+        `${tool.name}: outputSchema must declare documentary_receipt`,
       );
     }
   },

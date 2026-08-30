@@ -15,6 +15,10 @@
 
 import { resolveSimulationNetlist } from "../api/netlist-resolve.ts";
 import {
+  executeDocumentedSimulation,
+  normalizeSelectors,
+} from "../api/documented-simulation.ts";
+import {
   MAX_OBSERVABLES_PER_KIND,
   MAX_TIMEOUT_SECONDS,
   MIN_TIMEOUT_SECONDS,
@@ -25,6 +29,7 @@ import {
   validateNodeName,
   validateSourceName,
 } from "../api/netlist-security.ts";
+import { getNetlistPath, putNetlistBytes } from "../api/netlist-store.ts";
 import { runNgspiceTran } from "../api/ngspice.ts";
 import { SpiceToolError } from "../api/tool-error.ts";
 import type { SpiceTool } from "./types.ts";
@@ -229,6 +234,26 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
         source_path: { type: "string" },
       },
     },
+    documentary_receipt: {
+      type: "object",
+      description:
+        "Documentary provider receipt reference. It is not Digital Thread product evidence or a requirement verdict.",
+      additionalProperties: false,
+      required: [
+        "dispatch_sha256",
+        "receipt_sha256",
+        "outcome_sha256",
+        "execution_state",
+        "documentary_only",
+      ],
+      properties: {
+        dispatch_sha256: { type: "string" },
+        receipt_sha256: { type: "string" },
+        outcome_sha256: { type: "string" },
+        execution_state: { const: "succeeded" },
+        documentary_only: { const: true },
+      },
+    },
   },
 };
 
@@ -287,40 +312,74 @@ export const tranTool: SpiceTool = {
       // 2. Read and validate security.
       const circuitContent = await Deno.readTextFile(snapshot.artifact.path);
       validateNetlistSecurity(circuitContent, TOOL_NAME);
-
-      // 3. Run the simulation.
-      const result = await runNgspiceTran(
-        circuitContent,
-        tstep_s,
-        tstop_s,
-        nodes,
-        timeoutMs,
-        branchSources,
+      // A legacy path becomes durable content-addressed input before ACK.
+      const admitted = await putNetlistBytes(
+        new TextEncoder().encode(circuitContent),
+        TOOL_NAME,
       );
-
-      // 4. Build cross-tool measurements alias (final_v per node).
-      const measurements: Record<string, { value: number }> = {};
-      for (const [node, stats] of Object.entries(result.nodeStats)) {
-        measurements[node] = { value: stats.final_v };
+      if (admitted.sha256 !== snapshot.artifact.sha256) {
+        throw new SpiceToolError(
+          "simulation_netlist_identity_mismatch",
+          {
+            snapshot_sha256: snapshot.artifact.sha256,
+            admitted_sha256: admitted.sha256,
+          },
+          "Do not dispatch. The durable netlist copy does not match the private snapshot.",
+        );
       }
+      const durableSourcePath = await getNetlistPath(admitted.sha256, TOOL_NAME);
+
+      const documented = await executeDocumentedSimulation({
+        analysis_kind: "tran",
+        netlist_sha256: admitted.sha256,
+        normalized_request: {
+          tstep_s,
+          tstop_s,
+          nodes: normalizeSelectors(nodes),
+          branch_sources: normalizeSelectors(branchSources),
+          timeout_s: timeoutMs / 1000,
+        },
+        execute: async () => {
+          // The acknowledgement is durable before this subprocess starts.
+          const result = await runNgspiceTran(
+            circuitContent,
+            tstep_s,
+            tstop_s,
+            nodes,
+            timeoutMs,
+            branchSources,
+          );
+          const measurements: Record<string, { value: number }> = {};
+          for (const [node, stats] of Object.entries(result.nodeStats)) {
+            measurements[node] = { value: stats.final_v };
+          }
+          return {
+            node_stats: result.nodeStats,
+            branch_current_stats_a: result.branchCurrentStats,
+            measurements,
+            simulation: {
+              n_points: result.nPoints,
+              tstop_s,
+            },
+            not_checked: NOT_CHECKED,
+            input_artifact: {
+              sha256: admitted.sha256,
+              bytes: admitted.bytes,
+            },
+          };
+        },
+      });
 
       return {
         content:
           `[${TOOL_NAME}] sha256:${snapshot.artifact.sha256}: reduced transient summaries; full time series not returned`,
         structuredContent: {
-          node_stats: result.nodeStats,
-          branch_current_stats_a: result.branchCurrentStats,
-          measurements,
-          simulation: {
-            n_points: result.nPoints,
-            tstop_s,
-          },
-          not_checked: NOT_CHECKED,
+          ...documented.result,
           input_artifact: {
-            sha256: snapshot.artifact.sha256,
-            bytes: snapshot.artifact.bytes,
-            source_path: snapshot.artifact.sourcePath,
+            ...documented.result.input_artifact,
+            source_path: durableSourcePath,
           },
+          documentary_receipt: documented.documentary_receipt,
         },
       };
     } finally {

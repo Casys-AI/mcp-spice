@@ -40,6 +40,7 @@ export {
 export type { NetlistArtifact, NetlistSnapshot } from "./src/api/netlist-artifact.ts";
 export {
   DEFAULT_TIMEOUT_MS,
+  EXECUTION_BUDGETS_VERSION,
   MAX_NGSPICE_LOG_BYTES,
   MAX_OBSERVABLES_PER_KIND,
   MAX_TIMEOUT_SECONDS,
@@ -57,6 +58,28 @@ export {
   validateSourceName,
 } from "./src/api/netlist-security.ts";
 export { resolveSimulationNetlist } from "./src/api/netlist-resolve.ts";
+export {
+  beginSimulationDispatch,
+  canonicalJsonBytes,
+  captureRuntimeIdentity,
+  configureReceiptStoreDir,
+  getSimulationDispatch,
+  getSimulationReceipt,
+  getSimulationResult,
+  MCP_SPICE_VERSION,
+  publishSimulationOutcome,
+  resolveReceiptStoreDir,
+} from "./src/api/simulation-receipts.ts";
+export type {
+  AnalysisKind,
+  JsonRecord,
+  JsonValue,
+  PublishedSimulation,
+  RuntimeIdentity,
+  SimulationDispatch,
+  SimulationExecutionState,
+  SimulationReceipt,
+} from "./src/api/simulation-receipts.ts";
 export {
   configureNetlistStoreDir,
   getNetlistPath,

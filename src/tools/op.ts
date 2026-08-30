@@ -17,6 +17,10 @@
 
 import { resolveSimulationNetlist } from "../api/netlist-resolve.ts";
 import {
+  executeDocumentedSimulation,
+  normalizeSelectors,
+} from "../api/documented-simulation.ts";
+import {
   MAX_OBSERVABLES_PER_KIND,
   MAX_TIMEOUT_SECONDS,
   MIN_TIMEOUT_SECONDS,
@@ -27,6 +31,7 @@ import {
   validateNodeName,
   validateSourceName,
 } from "../api/netlist-security.ts";
+import { getNetlistPath, putNetlistBytes } from "../api/netlist-store.ts";
 import { runNgspiceOp } from "../api/ngspice.ts";
 import { SpiceToolError } from "../api/tool-error.ts";
 import type { SpiceTool } from "./types.ts";
@@ -162,6 +167,26 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
         source_path: { type: "string" },
       },
     },
+    documentary_receipt: {
+      type: "object",
+      description:
+        "Documentary provider receipt reference. It is not Digital Thread product evidence or a requirement verdict.",
+      additionalProperties: false,
+      required: [
+        "dispatch_sha256",
+        "receipt_sha256",
+        "outcome_sha256",
+        "execution_state",
+        "documentary_only",
+      ],
+      properties: {
+        dispatch_sha256: { type: "string" },
+        receipt_sha256: { type: "string" },
+        outcome_sha256: { type: "string" },
+        execution_state: { const: "succeeded" },
+        documentary_only: { const: true },
+      },
+    },
   },
 };
 
@@ -241,22 +266,58 @@ export const opTool: SpiceTool = {
       // 2. Read and validate security BEFORE subprocess launch.
       const circuitContent = await Deno.readTextFile(snapshot.artifact.path);
       validateNetlistSecurity(circuitContent, TOOL_NAME);
-
-      // 3. Run the simulation (server builds .control block).
-      const result = await runNgspiceOp(
-        circuitContent,
-        nodes,
-        timeoutMs,
-        branchSources,
+      // A legacy path becomes durable content-addressed input before ACK.
+      const admitted = await putNetlistBytes(
+        new TextEncoder().encode(circuitContent),
+        TOOL_NAME,
       );
-
-      // 4. Build structured output. measurements stay voltage-only.
-      const node_voltages = result.nodeVoltages;
-      const branch_currents_a = result.branchCurrents;
-      const measurements: Record<string, { value: number }> = {};
-      for (const [k, v] of Object.entries(node_voltages)) {
-        measurements[k] = { value: v };
+      if (admitted.sha256 !== snapshot.artifact.sha256) {
+        throw new SpiceToolError(
+          "simulation_netlist_identity_mismatch",
+          {
+            snapshot_sha256: snapshot.artifact.sha256,
+            admitted_sha256: admitted.sha256,
+          },
+          "Do not dispatch. The durable netlist copy does not match the private snapshot.",
+        );
       }
+      const durableSourcePath = await getNetlistPath(admitted.sha256, TOOL_NAME);
+
+      const documented = await executeDocumentedSimulation({
+        analysis_kind: "op",
+        netlist_sha256: admitted.sha256,
+        normalized_request: {
+          nodes: normalizeSelectors(nodes),
+          branch_sources: normalizeSelectors(branchSources),
+          timeout_s: timeoutMs / 1000,
+        },
+        execute: async () => {
+          // The acknowledgement is durable before this subprocess starts.
+          const result = await runNgspiceOp(
+            circuitContent,
+            nodes,
+            timeoutMs,
+            branchSources,
+          );
+          const measurements: Record<string, { value: number }> = {};
+          for (const [key, value] of Object.entries(result.nodeVoltages)) {
+            measurements[key] = { value };
+          }
+          return {
+            node_voltages: result.nodeVoltages,
+            branch_currents_a: result.branchCurrents,
+            measurements,
+            not_checked: NOT_CHECKED,
+            input_artifact: {
+              sha256: admitted.sha256,
+              bytes: admitted.bytes,
+            },
+          };
+        },
+      });
+
+      const node_voltages = documented.result.node_voltages;
+      const branch_currents_a = documented.result.branch_currents_a;
 
       const summaryParts = [
         ...nodes.map((n) => `${n}=${(node_voltages[n] ?? NaN).toExponential(4)} V`),
@@ -270,15 +331,12 @@ export const opTool: SpiceTool = {
           summaryParts.join(", ")
         }`,
         structuredContent: {
-          node_voltages,
-          branch_currents_a,
-          measurements,
-          not_checked: NOT_CHECKED,
+          ...documented.result,
           input_artifact: {
-            sha256: snapshot.artifact.sha256,
-            bytes: snapshot.artifact.bytes,
-            source_path: snapshot.artifact.sourcePath,
+            ...documented.result.input_artifact,
+            source_path: durableSourcePath,
           },
+          documentary_receipt: documented.documentary_receipt,
         },
       };
     } finally {

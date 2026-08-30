@@ -10,6 +10,10 @@
 
 import { resolveSimulationNetlist } from "../api/netlist-resolve.ts";
 import {
+  executeDocumentedSimulation,
+  normalizeSelectors,
+} from "../api/documented-simulation.ts";
+import {
   MAX_OBSERVABLES_PER_KIND,
   MAX_TIMEOUT_SECONDS,
   MIN_TIMEOUT_SECONDS,
@@ -20,6 +24,7 @@ import {
   validateNodeName,
   validateSourceName,
 } from "../api/netlist-security.ts";
+import { getNetlistPath, putNetlistBytes } from "../api/netlist-store.ts";
 import {
   estimateDcSweepPoints,
   MAX_DC_SWEEP_POINTS,
@@ -238,6 +243,26 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
         source_path: { type: "string" },
       },
     },
+    documentary_receipt: {
+      type: "object",
+      description:
+        "Documentary provider receipt reference. It is not Digital Thread product evidence or a requirement verdict.",
+      additionalProperties: false,
+      required: [
+        "dispatch_sha256",
+        "receipt_sha256",
+        "outcome_sha256",
+        "execution_state",
+        "documentary_only",
+      ],
+      properties: {
+        dispatch_sha256: { type: "string" },
+        receipt_sha256: { type: "string" },
+        outcome_sha256: { type: "string" },
+        execution_state: { const: "succeeded" },
+        documentary_only: { const: true },
+      },
+    },
   },
 };
 
@@ -283,42 +308,81 @@ export const dcTool: SpiceTool = {
     try {
       const circuitContent = await Deno.readTextFile(snapshot.artifact.path);
       validateNetlistSecurity(circuitContent, TOOL_NAME);
-      const result = await runNgspiceDc(
-        circuitContent,
-        sweepSource,
-        start_v,
-        stop_v,
-        step_v,
-        nodes,
-        timeoutMs,
-        branchSources,
+      // A legacy path becomes durable content-addressed input before ACK.
+      const admitted = await putNetlistBytes(
+        new TextEncoder().encode(circuitContent),
+        TOOL_NAME,
       );
-      const measurements: Record<string, { value: number }> = {};
-      for (const [node, stats] of Object.entries(result.nodeStats)) {
-        measurements[node] = { value: stats.final_v };
+      if (admitted.sha256 !== snapshot.artifact.sha256) {
+        throw new SpiceToolError(
+          "simulation_netlist_identity_mismatch",
+          {
+            snapshot_sha256: snapshot.artifact.sha256,
+            admitted_sha256: admitted.sha256,
+          },
+          "Do not dispatch. The durable netlist copy does not match the private snapshot.",
+        );
       }
+      const durableSourcePath = await getNetlistPath(admitted.sha256, TOOL_NAME);
+      const documented = await executeDocumentedSimulation({
+        analysis_kind: "dc",
+        netlist_sha256: admitted.sha256,
+        normalized_request: {
+          sweep_source: sweepSource,
+          start_v,
+          stop_v,
+          step_v,
+          nodes: normalizeSelectors(nodes),
+          branch_sources: normalizeSelectors(branchSources),
+          timeout_s: timeoutMs / 1000,
+        },
+        execute: async () => {
+          // The acknowledgement is durable before this subprocess starts.
+          const result = await runNgspiceDc(
+            circuitContent,
+            sweepSource,
+            start_v,
+            stop_v,
+            step_v,
+            nodes,
+            timeoutMs,
+            branchSources,
+          );
+          const measurements: Record<string, { value: number }> = {};
+          for (const [node, stats] of Object.entries(result.nodeStats)) {
+            measurements[node] = { value: stats.final_v };
+          }
+          return {
+            node_stats: result.nodeStats,
+            branch_current_stats_a: result.branchCurrentStats,
+            measurements,
+            sweep: {
+              source: sweepSource,
+              start_v,
+              stop_v,
+              step_v,
+              n_points: result.nPoints,
+              max_points: MAX_DC_SWEEP_POINTS,
+            },
+            not_checked: NOT_CHECKED,
+            input_artifact: {
+              sha256: admitted.sha256,
+              bytes: admitted.bytes,
+            },
+          };
+        },
+      });
 
       return {
         content:
           `[${TOOL_NAME}] sha256:${snapshot.artifact.sha256}: reduced DC sweep summaries; full transfer curve not returned`,
         structuredContent: {
-          node_stats: result.nodeStats,
-          branch_current_stats_a: result.branchCurrentStats,
-          measurements,
-          sweep: {
-            source: sweepSource,
-            start_v,
-            stop_v,
-            step_v,
-            n_points: result.nPoints,
-            max_points: MAX_DC_SWEEP_POINTS,
-          },
-          not_checked: NOT_CHECKED,
+          ...documented.result,
           input_artifact: {
-            sha256: snapshot.artifact.sha256,
-            bytes: snapshot.artifact.bytes,
-            source_path: snapshot.artifact.sourcePath,
+            ...documented.result.input_artifact,
+            source_path: durableSourcePath,
           },
+          documentary_receipt: documented.documentary_receipt,
         },
       };
     } finally {

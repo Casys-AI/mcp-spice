@@ -34,6 +34,8 @@ The current source checkout can:
 - run a bounded DC sweep over one named voltage source and return reduced voltage and
   branch-current summaries rather than a raw transfer curve;
 - attest every consumed netlist with its SHA-256 and byte length;
+- publish immutable documentary receipts and bounded-result records that survive a
+  process or container restart, with exact readback by SHA-256;
 - serve stateless MCP over HTTP or framework-native, era-aware stdio.
 
 `mcp-spice` is a numerical engine. It reports observations and declared analysis limits;
@@ -46,8 +48,9 @@ it does not decide whether a circuit satisfies a requirement.
 The published multi-architecture 0.5.2 release-code image is pinned below by digest. Its
 entrypoint is `./docker-entrypoint.sh` and its `CMD` is `http`; the command below
 therefore starts the stateless HTTP transport. The image contains Deno 2.9.6 and the
-tested ngspice 44.2 baseline. The named volume preserves submitted netlists across container
-restarts.
+tested ngspice 44.2 baseline. The named volume preserves submitted netlists across
+container restarts. This unreleased source checkout additionally writes documentary
+simulation records to that same volume; no published 0.5.2 artifact is being redefined.
 
 ```bash
 docker run --rm \
@@ -135,7 +138,9 @@ content-addressed store helpers for embedding in a Deno application.
 
 ## MCP tools
 
-The table below describes the shared 0.5.2 source, JSR, and qualified image surface.
+The table below describes this source checkout. The published 0.5.2 JSR package and
+qualified image retain their released surface; the documentary readback entries below are
+unreleased until a separately versioned publication is qualified.
 Historical 0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected
 `branch_sources`, and did not return `branch_currents_a`.
 
@@ -145,6 +150,9 @@ Historical 0.3.0 context: `spice_simulate_op` required `nodes[]`, rejected
 | `spice_simulate_op`      | Run a DC operating point                      | `netlist_sha256` and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path`                                                 | `node_voltages`, `branch_currents_a`, `measurements`, `not_checked`, `input_artifact`                 |
 | `spice_simulate_tran`    | Run a transient analysis                      | `netlist_sha256`, `tstep_s`, `tstop_s`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path`                          | `node_stats`, `branch_current_stats_a`, `measurements`, `simulation`, `not_checked`, `input_artifact` |
 | `spice_simulate_dc`      | Run one bounded DC source sweep               | `netlist_sha256`, `sweep_source`, `start_v`, `stop_v`, `step_v`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path` | `node_stats`, `branch_current_stats_a`, `measurements`, `sweep`, `not_checked`, `input_artifact`      |
+| `spice_simulation_receipt_get` | Read one immutable documentary receipt | `receipt_sha256` | Exact receipt after receipt/result/netlist rehash checks |
+| `spice_simulation_result_get` | Read one immutable documentary outcome | `outcome_sha256` | Exact bounded outcome after byte rehash |
+| `spice_simulation_dispatch_get` | Inspect recovery state | `dispatch_sha256` | Acknowledged dispatch and optional terminal publication |
 
 Each registered operation is non-destructive, idempotent, and closed-world. Simulation
 calls default to a 30-second timeout; `timeout_s` outside 1–300 seconds is refused.
@@ -153,6 +161,57 @@ Both source modes accept at most 1 MiB of netlist bytes. Each `nodes[]` and
 files are each capped at 8 MiB before decoding; reduced transient statistics stop at
 50,000 samples and DC statistics stop at 512 sweep points. ngspice stdout and stderr
 are each capped at 1 MiB before diagnostic parsing.
+
+## Durable documentary receipts and recovery
+
+Every simulation first copies the exact private snapshot into the immutable netlist
+CAS, including a legacy `netlist_path` call. Before the server starts ngspice, it writes
+an immutable acknowledged dispatch record. A terminal run then publishes in this order:
+immutable bounded outcome, immutable receipt, then an immutable publication record. The
+last record is the only indication that the dispatch is terminal.
+
+The receipt is canonical UTF-8 JSON addressed by its SHA-256. It binds the netlist
+SHA-256, analysis kind, canonical normalized request (sorted unique selectors, resolved
+timeout, and finite numeric arguments), exact provider/runtime identity, outcome SHA-256,
+and terminal execution state (`succeeded` or `failed`). Runtime identity includes the
+provider version, `execution-budgets/1.0`, Deno version and platform, and the exact
+ngspice version-output digest. Caller paths, URIs, timestamps, and process identifiers do
+not enter those identities.
+
+By default the named `NGSPICE_RUNS_DIR` volume contains separate immutable namespaces:
+
+```text
+inputs/<netlist sha256>
+receipts/dispatches/<canonical requested-work sha256>
+receipts/results/<outcome sha256>
+receipts/receipts/<receipt sha256>
+receipts/publications/<canonical requested-work sha256>
+```
+
+The normal simulation response adds `documentary_receipt`, with the dispatch, receipt,
+and outcome identities. Its `input_artifact.source_path` is reconstructed from the durable
+netlist digest; it is provider-local metadata and is deliberately not part of the
+outcome digest. The existing reduced-result limits remain unchanged: raw transient and DC
+data are not retained or exposed by this receipt contract.
+
+`spice_simulation_receipt_get` rehashes the stored receipt and its linked outcome and
+netlist before returning it. `spice_simulation_result_get` rehashes the exact canonical
+outcome bytes before returning `result`; when applicable, its separate
+`input_artifact_source_path` reconstructs provider-local input location without changing
+those exact bytes. `spice_simulation_dispatch_get` exposes whether a dispatch is merely
+acknowledged or has a terminal publication. Corrupt, missing, or non-canonical bytes are
+typed failures; the server never silently reconstructs them.
+
+If a restart finds an acknowledged dispatch without a publication, it returns
+`simulation_dispatch_uncertain`. This state is deliberately fail-closed: the server does
+not rerun automatically, even if the restart has a different runtime. A known typed
+ngspice failure is terminally recorded as `failed` and is replayed as the same typed MCP
+error. A write that never reached the acknowledgement is absent and therefore retryable.
+Inspect the dispatch by identity and make any distinct follow-up request deliberately.
+
+These records are documentary provider records only. They are not Digital Thread product
+evidence, a requirement verdict, or a substitute for
+`simulate.run-admitted-spice@1`.
 
 ## End-to-end content-addressed workflow
 
@@ -394,7 +453,8 @@ Every successful tool response has a short text `content` summary and closed
 - Admission, selector-validation, provenance, and ngspice failures are serialized as
   `{ "code", "context", "recovery" }`. Examples include `netlist_sha256_mismatch`,
   `netlist_forbidden_directive`, `invalid_node_name`, `ngspice_unavailable`,
-  `ngspice_timeout`, `ngspice_output_limit_exceeded`, and `ngspice_dc_grid_invalid`.
+  `ngspice_timeout`, `ngspice_output_limit_exceeded`, `ngspice_dc_grid_invalid`,
+  `simulation_dispatch_uncertain`, and typed durable-record corruption errors.
 - ngspice non-zero exits, error/fatal log lines, malformed or divergent `wrdata`,
   missing output, output-limit breaches, and absent requested observables fail the tool
   call instead of returning a partial success.

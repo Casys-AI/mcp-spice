@@ -4,7 +4,16 @@
  * covered together.
  */
 import { assert, assertEquals } from "@std/assert";
+import { join } from "@std/path";
 import { TextLineStream } from "@std/streams/text-line-stream";
+import { EXECUTION_BUDGETS_VERSION } from "../src/api/execution-budgets.ts";
+import { configureNetlistStoreDir, putNetlistBytes } from "../src/api/netlist-store.ts";
+import {
+  beginSimulationDispatch,
+  configureReceiptStoreDir,
+  MCP_SPICE_VERSION,
+  publishSimulationOutcome,
+} from "../src/api/simulation-receipts.ts";
 
 const PACKAGE_VERSION = (JSON.parse(
   Deno.readTextFileSync(new URL("../deno.json", import.meta.url)),
@@ -246,5 +255,106 @@ Deno.test(
       name: "mcp-spice",
       version: PACKAGE_VERSION,
     });
+  },
+);
+
+Deno.test(
+  "server --stdio reads an exact durable documentary receipt after restart",
+  async () => {
+    const root = await Deno.makeTempDir({ prefix: "mcp-spice-stdio-receipts-" });
+    configureNetlistStoreDir(join(root, "inputs"));
+    configureReceiptStoreDir(join(root, "receipts"));
+    const netlistText = "V1 in 0 1\nR1 in 0 1000\n.end\n";
+    const netlist = await putNetlistBytes(
+      new TextEncoder().encode(netlistText),
+      "stdio_receipt_test",
+    );
+    const ngspiceVersion = "ngspice stdio test runtime";
+    const started = await beginSimulationDispatch({
+      analysis_kind: "op",
+      netlist_sha256: netlist.sha256,
+      normalized_request: {
+        nodes: ["in"],
+        branch_sources: [],
+        timeout_s: 30,
+      },
+      runtime_identity: {
+        mcp_spice_version: MCP_SPICE_VERSION,
+        execution_budgets: EXECUTION_BUDGETS_VERSION,
+        deno_version: "2.9.6-test",
+        os: "test",
+        arch: "test",
+        ngspice_version: ngspiceVersion,
+        ngspice_version_sha256: await sha256Hex(ngspiceVersion),
+      },
+    });
+    const published = await publishSimulationOutcome({
+      dispatch_sha256: started.dispatch_sha256,
+      dispatch: started.dispatch,
+      execution_state: "succeeded",
+      result: {
+        node_voltages: { in: 1 },
+        branch_currents_a: {},
+        measurements: { in: { value: 1 } },
+        not_checked: ["documentary test only"],
+        input_artifact: { sha256: netlist.sha256, bytes: netlist.bytes },
+      },
+    });
+    configureReceiptStoreDir(undefined);
+    configureNetlistStoreDir(undefined);
+
+    const server = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-all",
+        new URL("../server.ts", import.meta.url).pathname,
+        "--stdio",
+      ],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "null",
+      env: { NGSPICE_RUNS_DIR: root },
+    }).spawn();
+    const writer = server.stdin.getWriter();
+    const send = (message: Record<string, unknown>) =>
+      writer.write(new TextEncoder().encode(JSON.stringify(message) + "\n"));
+    try {
+      await send({
+        jsonrpc: "2.0",
+        id: 30,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "mcp-spice-stdio-test", version: "0" },
+        },
+      });
+      await send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      await send({
+        jsonrpc: "2.0",
+        id: 31,
+        method: "tools/call",
+        params: {
+          name: "spice_simulation_receipt_get",
+          arguments: { receipt_sha256: published.receipt_sha256 },
+        },
+      });
+      const responses = await collectResponses(server.stdout, 2, 30_000);
+      assertEquals(responses.length, 2);
+      assertEquals(responses[1].id, 31);
+      const result = responses[1].result as Record<string, unknown>;
+      assertEquals(result.isError, undefined);
+      const structured = result.structuredContent as Record<string, unknown>;
+      assertEquals(structured.receipt_sha256, published.receipt_sha256);
+    } finally {
+      await writer.close();
+      try {
+        server.kill("SIGTERM");
+      } catch {
+        /* process already stopped */
+      }
+      await server.status;
+      await Deno.remove(root, { recursive: true });
+    }
   },
 );

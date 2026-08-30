@@ -7,6 +7,9 @@
 
 import { SpiceToolError } from "./tool-error.ts";
 
+/** Immutable identifier for the limits bound into documentary receipts. */
+export const EXECUTION_BUDGETS_VERSION = "execution-budgets/1.0";
+
 /** Exact UTF-8 netlist bytes accepted through either source mode. */
 export const NETLIST_MAX_BYTES = 1_048_576;
 

@@ -15,7 +15,7 @@
  * URI is `spice-netlist:sha256:<hex>`, not a host filesystem path.
  */
 
-import { join } from "@std/path";
+import { dirname, join } from "@std/path";
 import { NETLIST_MAX_BYTES } from "./execution-budgets.ts";
 import { sha256Hex } from "./netlist-artifact.ts";
 import { SpiceToolError } from "./tool-error.ts";
@@ -106,7 +106,18 @@ export async function putNetlistBytes(
   const dest = join(storeDir, sha256);
   const tmp = join(storeDir, `.tmp-${sha256}-${crypto.randomUUID()}`);
 
-  await Deno.writeFile(tmp, bytes, { createNew: true, mode: 0o400 });
+  const temporary = await Deno.open(tmp, {
+    write: true,
+    createNew: true,
+    mode: 0o600,
+  });
+  try {
+    await writeAll(temporary, bytes);
+    await temporary.sync();
+    await Deno.chmod(tmp, 0o400);
+  } finally {
+    temporary.close();
+  }
   try {
     await exclusiveCreate(tmp, dest, bytes, toolName, sha256);
   } finally {
@@ -148,7 +159,9 @@ export async function getNetlistPath(
 
 /**
  * Exclusive create of `dest`. `Deno.rename` would overwrite — forbidden.
- * `link` + compare-on-exists is the immutable CAS write.
+ * `link` + compare-on-exists is the immutable CAS write. There is deliberately
+ * no overwrite-capable fallback: a platform without exclusive links cannot
+ * safely publish this durable CAS object.
  */
 async function exclusiveCreate(
   tmp: string,
@@ -159,6 +172,7 @@ async function exclusiveCreate(
 ): Promise<void> {
   try {
     await Deno.link(tmp, dest);
+    await syncDirectoryForPath(dest);
     return;
   } catch (error) {
     if (error instanceof Deno.errors.AlreadyExists) {
@@ -167,15 +181,11 @@ async function exclusiveCreate(
     }
   }
 
-  try {
-    await Deno.writeFile(dest, bytes, { createNew: true, mode: 0o400 });
-  } catch (error) {
-    if (error instanceof Deno.errors.AlreadyExists) {
-      await assertSameContent(dest, bytes, toolName, sha256);
-      return;
-    }
-    throw error;
-  }
+  throw new SpiceToolError(
+    "netlist_store_atomic_publish_failed",
+    { toolName, sha256 },
+    "Do not retry against an uncertain store write. Restore a filesystem that supports exclusive immutable publication.",
+  );
 }
 
 async function assertSameContent(
@@ -204,4 +214,20 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
   return diff === 0;
+}
+
+async function writeAll(file: Deno.FsFile, bytes: Uint8Array): Promise<void> {
+  let offset = 0;
+  while (offset < bytes.length) {
+    offset += await file.write(bytes.subarray(offset));
+  }
+}
+
+async function syncDirectoryForPath(path: string): Promise<void> {
+  const handle = await Deno.open(dirname(path), { read: true });
+  try {
+    await handle.sync();
+  } finally {
+    handle.close();
+  }
 }

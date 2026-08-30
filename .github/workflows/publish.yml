@@ -25,7 +25,7 @@ jobs:
           ngspice --version
 
       - name: Verify release gates
-        run: SPICE_RUN_NATIVE=1 deno task release:check
+        run: NGSPICE_RUNS_DIR="$RUNNER_TEMP/mcp-spice-runs" SPICE_RUN_NATIVE=1 deno task release:check
 
   publish-jsr:
     needs: check

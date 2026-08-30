@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Durable, append-only documentary simulation records: acknowledged dispatch,
+  exact bounded outcome, immutable receipt, and terminal publication. Receipts
+  bind the netlist digest, canonical normalized request, analysis kind, runtime
+  identity, execution budget contract, outcome digest, and terminal state.
+- Exact receipt, outcome, and dispatch readback tools with byte rehashing and
+  corruption checks. Provider-local source paths are reconstructed from the
+  durable netlist identity rather than persisted in the outcome digest.
+
+### Changed
+
+- An acknowledged dispatch without a terminal publication is now fail-closed
+  (`simulation_dispatch_uncertain`): the provider never automatically reruns
+  a possibly dispatched request after a restart. Known typed failures are
+  durably terminal and retain their machine-readable error envelope.
+
 ## [0.5.2] - 2026-08-28
 
 ### Fixed
