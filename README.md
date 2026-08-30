@@ -7,11 +7,11 @@ compact, structured results tied to the exact input bytes.
 [container image](https://github.com/Casys-AI/mcp-spice/pkgs/container/mcp-spice) ·
 [changelog](CHANGELOG.md) · [security policy](SECURITY.md)
 
-**Release status.** Version `0.5.2` is published on JSR and as a native-gated,
-multi-architecture GHCR image. This source checkout declares unreleased version `0.6.0`.
-Executable JSR examples pin `jsr:@casys/mcp-spice@0.5.2`; Docker examples pin the
-qualified OCI index digest. `:latest` is a mutable convenience tag, not the authority
-for a version or capability.
+**Release status.** This checkout is the `0.6.0` release candidate. The main workflow
+publishes that exact JSR version only after the native ngspice suite passes; the
+subsequent `v0.6.0` tag separately qualifies and publishes the multi-architecture GHCR
+image. The version-pinned commands below become available after those gates pass. For a
+durable deployment, use the immutable OCI index digest reported by GHCR.
 
 Historical 0.3.0 context: that release's JSR package and digest-pinned image had package
 version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant `server/discover`
@@ -44,20 +44,20 @@ it does not decide whether a circuit satisfies a requirement.
 
 ## Quick start
 
-### Published 0.5.2 Docker image
+### 0.6.0 Docker image after tag publication
 
-The published multi-architecture 0.5.2 release-code image is pinned below by digest. Its
-entrypoint is `./docker-entrypoint.sh` and its `CMD` is `http`; the command below
-therefore starts the stateless HTTP transport. The image contains Deno 2.9.6 and the
-tested ngspice 44.2 baseline. The named volume preserves submitted netlists across
-container restarts. This unreleased source checkout additionally writes documentary
-simulation records to that same volume; no published 0.5.2 artifact is being redefined.
+The `v0.6.0` release workflow builds the image for amd64 and arm64, runs the native
+ngspice suite, and then publishes the version tag below. Its entrypoint is
+`./docker-entrypoint.sh` and its `CMD` is `http`; the command therefore starts the
+stateless HTTP transport. The image contains Deno 2.9.6 and the tested ngspice 44.2
+baseline. The named volume preserves submitted netlists and documentary simulation
+records across container restarts.
 
 ```bash
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:80f8d6b34dc55e623daf936faea5ff9ee75871331aa88d7339191ea17584991b http
+  ghcr.io/casys-ai/mcp-spice:0.6.0 http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. This repository's native HTTP transport
@@ -75,15 +75,15 @@ curl -sS -X POST http://127.0.0.1:3023/mcp \
 For a raw `tools/call` request, also set `Mcp-Name` to the exact tool name in
 `params.name`. Native stdio clients do not use this HTTP transport envelope.
 
-`:latest` is a mutable convenience tag, not the authority for the 0.5.2 contract. Use
-the digest above for a reproducible or production deployment.
+The version tag identifies the release. Once GHCR reports its OCI index digest, use the
+digest form for a reproducible or production deployment.
 
-### Native stdio from source or JSR 0.5.2
+### Native stdio from source or published JSR 0.6.0
 
-The source server and JSR 0.5.2 use the framework-native, era-aware stdio transport
-directly. They accept the classic `2025-06-18` initialize handshake and write only
-JSON-RPC messages to stdout. Running from a source checkout still requires ngspice on
-`PATH`:
+The source server uses the framework-native, era-aware stdio transport directly; the
+published JSR 0.6.0 package uses the same path. Both accept the classic `2025-06-18`
+initialize handshake and write only JSON-RPC messages to stdout. Running from a source
+checkout still requires ngspice on `PATH`:
 
 ```bash
 deno run --allow-all server.ts --stdio
@@ -92,17 +92,18 @@ deno run --allow-all server.ts --stdio
 The equivalent version-pinned JSR command is:
 
 ```bash
-deno run --allow-all jsr:@casys/mcp-spice@0.5.2/server --stdio
+deno run --allow-all jsr:@casys/mcp-spice@0.6.0/server --stdio
 ```
 
 The JSR module also requires an `ngspice` executable on `PATH`.
 
-The qualified 0.5.2 image also runs native stdio when `stdio` is passed to Docker:
+After tag publication, the 0.6.0 image also runs native stdio when `stdio` is passed to
+Docker:
 
 ```bash
 docker run --rm -i \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:80f8d6b34dc55e623daf936faea5ff9ee75871331aa88d7339191ea17584991b stdio
+  ghcr.io/casys-ai/mcp-spice:0.6.0 stdio
 ```
 
 Passing `stdio` overrides the image's `CMD http`; it does not start an HTTP child.
@@ -118,11 +119,11 @@ brew install ngspice
 # Debian / Ubuntu
 sudo apt install ngspice
 
-deno run --allow-all jsr:@casys/mcp-spice@0.5.2/server --port=3023
+deno run --allow-all jsr:@casys/mcp-spice@0.6.0/server --port=3023
 ```
 
-The version-pinned JSR command and source checkout are separate from the digest-pinned
-published 0.5.2 image. The shared versioned surface includes `execution-budgets/1.0`.
+The version-pinned JSR command and source checkout are separate from the release image.
+The shared versioned surface includes `execution-budgets/1.0`.
 
 For local development from this source checkout:
 
@@ -139,21 +140,19 @@ content-addressed store helpers for embedding in a Deno application.
 
 ## MCP tools
 
-The table below describes this source checkout. The published 0.5.2 JSR package and
-qualified image retain their released surface; the documentary readback entries below
-are unreleased until a separately versioned publication is qualified. Historical 0.3.0
-context: `spice_simulate_op` required `nodes[]`, rejected `branch_sources`, and did not
-return `branch_currents_a`.
+The table below describes the 0.6.0 surface. Historical 0.3.0 context:
+`spice_simulate_op` required `nodes[]`, rejected `branch_sources`, and did not return
+`branch_currents_a`.
 
-| Tool                            | Purpose                                       | Required input                                                                                                                                                        | Structured result                                                                                     |
-| ------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `ngspice_netlist_submit`        | Verify, filter, and store exact netlist bytes | `netlist`; optional expected `netlist_sha256`                                                                                                                         | `sha256`, `bytes`, `uri`                                                                              |
-| `spice_simulate_op`             | Run a DC operating point                      | `netlist_sha256` and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path`                                                 | `node_voltages`, `branch_currents_a`, `measurements`, `not_checked`, `input_artifact`                 |
-| `spice_simulate_tran`           | Run a transient analysis                      | `netlist_sha256`, `tstep_s`, `tstop_s`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path`                          | `node_stats`, `branch_current_stats_a`, `measurements`, `simulation`, `not_checked`, `input_artifact` |
-| `spice_simulate_dc`             | Run one bounded DC source sweep               | `netlist_sha256`, `sweep_source`, `start_v`, `stop_v`, `step_v`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path` | `node_stats`, `branch_current_stats_a`, `measurements`, `sweep`, `not_checked`, `input_artifact`      |
-| `spice_simulation_receipt_get`  | Read one immutable documentary receipt        | `receipt_sha256`                                                                                                                                                      | Exact receipt after receipt/result/netlist rehash checks                                              |
-| `spice_simulation_result_get`   | Read one immutable documentary outcome        | `outcome_sha256`                                                                                                                                                      | Exact bounded outcome after byte rehash                                                               |
-| `spice_simulation_dispatch_get` | Inspect recovery state                        | `request_sha256`                                                                                                                                                      | Acknowledged request and optional terminal publication                                                |
+| Tool                            | Purpose                                       | Required input                                                                                                                                                        | Structured result                                                                                                            |
+| ------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `ngspice_netlist_submit`        | Verify, filter, and store exact netlist bytes | `netlist`; optional expected `netlist_sha256`                                                                                                                         | `sha256`, `bytes`, `uri`                                                                                                     |
+| `spice_simulate_op`             | Run a DC operating point                      | `netlist_sha256` and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path`                                                 | `node_voltages`, `branch_currents_a`, `measurements`, `not_checked`, `input_artifact`, `documentary_receipt`                 |
+| `spice_simulate_tran`           | Run a transient analysis                      | `netlist_sha256`, `tstep_s`, `tstop_s`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path`                          | `node_stats`, `branch_current_stats_a`, `measurements`, `simulation`, `not_checked`, `input_artifact`, `documentary_receipt` |
+| `spice_simulate_dc`             | Run one bounded DC source sweep               | `netlist_sha256`, `sweep_source`, `start_v`, `stop_v`, `step_v`, and at least one of `nodes[]` or `branch_sources[]`; optional `netlist_uri` or legacy `netlist_path` | `node_stats`, `branch_current_stats_a`, `measurements`, `sweep`, `not_checked`, `input_artifact`, `documentary_receipt`      |
+| `spice_simulation_receipt_get`  | Read one immutable documentary receipt        | `receipt_sha256`                                                                                                                                                      | Exact receipt after receipt/result/netlist rehash checks                                                                     |
+| `spice_simulation_result_get`   | Read one immutable documentary outcome        | `outcome_sha256`                                                                                                                                                      | Exact bounded outcome after byte rehash                                                                                      |
+| `spice_simulation_dispatch_get` | Inspect recovery state                        | `request_sha256`                                                                                                                                                      | Acknowledged request and optional terminal publication                                                                       |
 
 Each registered operation is non-destructive, idempotent, and closed-world. Simulation
 calls default to a 30-second timeout; `timeout_s` outside 1–300 seconds is refused. Both
@@ -197,6 +196,13 @@ receipts/results/<outcome sha256>
 receipts/receipts/<receipt sha256>
 receipts/publications/<request sha256>
 ```
+
+The `inputs/` and `receipts/` roots are private, server-owned storage on a
+single/exclusive-writer volume. Bounded immutable snapshots fail closed for corrupt,
+oversized, substituted, symlinked, FIFO, or other unsafe pre-existing objects. They do
+not make a shared writable root safe against a concurrent actor already authorised to
+modify it; deploy with filesystem permissions and volume ownership that exclude such
+writers.
 
 The normal simulation response adds `documentary_receipt`, with the dispatch, receipt,
 and outcome identities. Its `input_artifact.source_path` is reconstructed from the
@@ -275,13 +281,14 @@ requests node voltages only:
 }
 ```
 
-The structured result contains the requested voltages and the identity of the private
-snapshot consumed by ngspice. This example is abridged only to shorten the `not_checked`
-list:
+The structured result contains the requested voltages, the identity of the private
+snapshot consumed by ngspice, and the durable documentary reference. This example
+shortens the `not_checked` list and labels the four digest values for readability:
 
 ```json
 {
   "node_voltages": { "out": 2, "in": 3 },
+  "branch_currents_a": {},
   "measurements": {
     "out": { "value": 2 },
     "in": { "value": 3 }
@@ -293,6 +300,14 @@ list:
     "sha256": "38173716ff427a29aee98fa88b7fcb51964c6d5aa7ab80dda7e4f42d796932a1",
     "bytes": 87,
     "source_path": "/ngspice-runs/inputs/38173716ff427a29aee98fa88b7fcb51964c6d5aa7ab80dda7e4f42d796932a1"
+  },
+  "documentary_receipt": {
+    "request_sha256": "<request sha256>",
+    "dispatch_sha256": "<dispatch sha256>",
+    "receipt_sha256": "<receipt sha256>",
+    "outcome_sha256": "<outcome sha256>",
+    "execution_state": "succeeded",
+    "documentary_only": true
   }
 }
 ```
@@ -301,7 +316,7 @@ list:
 
 #### Operating-point branch currents
 
-Published 0.4.0 accepts `branch_sources` and returns `branch_currents_a`:
+The current surface accepts `branch_sources` and returns `branch_currents_a`:
 
 ```json
 {
@@ -486,7 +501,7 @@ The present source surface stays deliberately bounded. It exposes an operating p
 transient summaries with timestamps and requested branch currents, and a one-dimensional
 DC source sweep reduced to extrema/final summaries. It does not expose AC analysis,
 noise analysis, Monte Carlo, caller-supplied control scripts, or waveform samples. The
-qualified 0.5.2 image exposes this same bounded analysis surface.
+tag workflow tests this same bounded surface before publishing the 0.6.0 image.
 
 | Area                 | Current behavior                                                                                                            |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -573,8 +588,8 @@ Regenerate engine fixtures only with ngspice available:
 deno run --allow-all scripts/gen_fixtures.ts
 ```
 
-Build a local container from this source checkout. That local tag is not the
-digest-pinned published 0.5.2 release-code image:
+Build a local container from this source checkout. That local tag is not the qualified
+0.6.0 release image:
 
 ```bash
 docker build -t mcp-spice:local .

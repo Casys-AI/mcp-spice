@@ -37,17 +37,24 @@ import type { MachineReadableErrorFields } from "./tool-error.ts";
 /** Raised when ngspice is absent from PATH. */
 export class NgspiceNotFoundError extends Error implements MachineReadableErrorFields {
   readonly code = "ngspice_unavailable";
-  readonly context: Record<string, unknown> = { executable: "ngspice" };
-  readonly recovery =
-    "Install ngspice on PATH, then retry the simulation. The published container image already includes the tested ngspice baseline.";
+  readonly context: Record<string, unknown>;
+  readonly recovery: string;
 
-  constructor() {
+  constructor(
+    options: {
+      context?: Record<string, unknown>;
+      recovery?: string;
+    } = {},
+  ) {
     super(
       "The ngspice executable was not found on PATH. " +
         "Install it first: `apt install ngspice` (Debian/Ubuntu) or " +
         "`brew install ngspice` (macOS).",
     );
     this.name = "NgspiceNotFoundError";
+    this.context = options.context ?? { executable: "ngspice" };
+    this.recovery = options.recovery ??
+      "Install ngspice on PATH, then retry the simulation. The published container image already includes the tested ngspice baseline.";
   }
 }
 

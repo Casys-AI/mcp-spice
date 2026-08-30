@@ -17,6 +17,7 @@
 
 import { dirname, join } from "@std/path";
 import { NETLIST_MAX_BYTES } from "./execution-budgets.ts";
+import { readImmutableFileWithinLimit } from "./immutable-file.ts";
 import { sha256Hex } from "./netlist-artifact.ts";
 import { SpiceToolError } from "./tool-error.ts";
 
@@ -196,26 +197,70 @@ async function assertSameContent(
   toolName: string,
   sha256: string,
 ): Promise<void> {
-  const existing = await Deno.readFile(dest);
-  if (!equalBytes(existing, bytes)) {
-    throw new SpiceToolError(
-      "netlist_store_collision",
-      {
-        toolName,
-        sha256,
-        existingBytes: existing.length,
-        submittedBytes: bytes.length,
-      },
-      "Refuse the write. The store already holds different bytes at this digest; do not retry with a mutated payload under the same hash.",
-    );
+  try {
+    await readImmutableFileWithinLimit({
+      root: dirname(dest),
+      sourcePath: dest,
+      maxBytes: NETLIST_MAX_BYTES,
+      expectedBytes: bytes,
+      fail: (reason, existingBytes = 0) =>
+        netlistStoreCollisionError(
+          toolName,
+          sha256,
+          existingBytes,
+          bytes.length,
+          collisionReason(reason),
+        ),
+    });
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      throw new SpiceToolError(
+        "netlist_store_atomic_publish_failed",
+        { toolName, sha256 },
+        "Do not retry against an uncertain store write. Restore a filesystem that supports exclusive immutable publication.",
+      );
+    }
+    throw error;
   }
 }
 
-function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  return diff === 0;
+function collisionReason(
+  reason:
+    | "not_regular_file"
+    | "too_large"
+    | "outside_store_root"
+    | "unsafe_parent"
+    | "changed_during_read"
+    | "content_mismatch",
+): string | undefined {
+  switch (reason) {
+    case "too_large":
+      return "size_mismatch";
+    case "content_mismatch":
+      return undefined;
+    default:
+      return reason;
+  }
+}
+
+function netlistStoreCollisionError(
+  toolName: string,
+  sha256: string,
+  existingBytes: number,
+  submittedBytes: number,
+  reason?: string,
+): SpiceToolError {
+  return new SpiceToolError(
+    "netlist_store_collision",
+    {
+      toolName,
+      sha256,
+      existingBytes,
+      submittedBytes,
+      ...(reason === undefined ? {} : { reason }),
+    },
+    "Refuse the write. The store already holds different bytes at this digest; do not retry with a mutated payload under the same hash.",
+  );
 }
 
 async function writeAll(file: Deno.FsFile, bytes: Uint8Array): Promise<void> {

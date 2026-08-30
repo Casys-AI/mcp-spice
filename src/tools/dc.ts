@@ -117,7 +117,7 @@ const INPUT_SCHEMA: Record<string, unknown> = {
   },
 };
 
-const OUTPUT_SCHEMA: Record<string, unknown> = {
+export const DC_OUTPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
   required: [
@@ -127,6 +127,7 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
     "sweep",
     "not_checked",
     "input_artifact",
+    "documentary_receipt",
   ],
   properties: {
     node_stats: {
@@ -274,7 +275,7 @@ export const dcTool: SpiceTool = {
     "Run a bounded ngspice DC sweep over one named independent voltage source and return reduced voltage/current extrema and final values. The server owns the DC command and never returns a raw transfer curve. Pass at least one of nodes or branch_sources. The tool measures; it does not declare circuit compliance.",
   category: "simulation",
   inputSchema: INPUT_SCHEMA,
-  outputSchema: OUTPUT_SCHEMA,
+  outputSchema: DC_OUTPUT_SCHEMA,
   annotations: {
     readOnlyHint: false,
     destructiveHint: false,

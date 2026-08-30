@@ -109,7 +109,7 @@ const INPUT_SCHEMA: Record<string, unknown> = {
   },
 };
 
-const OUTPUT_SCHEMA: Record<string, unknown> = {
+export const OP_OUTPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
   required: [
@@ -118,6 +118,7 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
     "measurements",
     "not_checked",
     "input_artifact",
+    "documentary_receipt",
   ],
   properties: {
     node_voltages: {
@@ -235,7 +236,7 @@ export const opTool: SpiceTool = {
     "specification — that verdict belongs to the oracle.",
   category: "simulation",
   inputSchema: INPUT_SCHEMA,
-  outputSchema: OUTPUT_SCHEMA,
+  outputSchema: OP_OUTPUT_SCHEMA,
   annotations: {
     readOnlyHint: false, // writes to a server-controlled temp dir during simulation
     destructiveHint: false,

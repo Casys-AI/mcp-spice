@@ -191,6 +191,49 @@ Deno.test(
   },
 );
 
+Deno.test("putNetlistBytes refuses unsafe pre-existing CAS collision targets", async () => {
+  const cases = [
+    {
+      name: "symlink",
+      reason: "not_regular_file",
+      prepare: async (dir: string, path: string) => {
+        const outside = `${dir}/outside-netlist`;
+        await Deno.writeTextFile(outside, VDIV);
+        await Deno.symlink(outside, path);
+      },
+    },
+    {
+      name: "FIFO",
+      reason: "not_regular_file",
+      prepare: async (_dir: string, path: string) => {
+        const output = await new Deno.Command("mkfifo", { args: [path] }).output();
+        assert(output.success, "mkfifo must create the test collision target");
+      },
+    },
+    {
+      name: "oversized regular file",
+      reason: "size_mismatch",
+      prepare: async (_dir: string, path: string) => {
+        await Deno.writeFile(path, new Uint8Array());
+        await Deno.truncate(path, NETLIST_MAX_BYTES + 1);
+      },
+    },
+  ];
+  for (const fixture of cases) {
+    await withStore(async (dir) => {
+      const bytes = new TextEncoder().encode(VDIV);
+      const sha256 = await sha256Hex(bytes);
+      await fixture.prepare(dir, `${dir}/${sha256}`);
+      const error = await assertRejects(
+        () => putNetlistBytes(bytes, "ngspice_netlist_submit", dir),
+        SpiceToolError,
+      );
+      assertEquals(error.code, "netlist_store_collision", fixture.name);
+      assertEquals(error.context.reason, fixture.reason, fixture.name);
+    });
+  }
+});
+
 Deno.test(
   "normalizeSha256 / getNetlistPath reject path-traversal hashes",
   async () => {

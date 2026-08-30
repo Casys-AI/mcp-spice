@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file. Format:
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Versioning:
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - Unreleased
+## [0.6.0] - 2026-08-30
 
 ### Added
 
@@ -17,6 +17,11 @@ All notable changes to this project will be documented in this file. Format:
   complete dispatch integrity hash; terminal publication has its own integrity hash.
   Provider-local source paths are reconstructed from the durable netlist identity rather
   than persisted in the outcome digest.
+- `spice_simulation_receipt_get`, `spice_simulation_result_get`, and
+  `spice_simulation_dispatch_get` advertise the closed durable record shapes they
+  return, including normalized request and runtime identity fields. Successful
+  operating-point, transient, and DC responses require a `documentary_receipt`
+  reference.
 
 ### Changed
 
@@ -24,6 +29,13 @@ All notable changes to this project will be documented in this file. Format:
   (`simulation_dispatch_uncertain`): the provider never automatically reruns a possibly
   dispatched request after a restart. Known typed failures are durably terminal and
   retain their machine-readable error envelope.
+- Runtime identity capture is bounded by a fixed deadline and output ceiling before
+  acknowledgement. Durable replay preserves the established `SpiceError`,
+  `NgspiceNotFoundError`, and `SpiceToolError` classes and their machine-readable codes.
+- Within the documented private single-writer store roots, durable documents and netlist
+  CAS objects are read through bounded immutable snapshots; unsafe links, non-regular
+  objects, oversized records, substitutions, and conflicting writers fail closed before
+  unbounded allocation.
 
 ## [0.5.2] - 2026-08-28
 

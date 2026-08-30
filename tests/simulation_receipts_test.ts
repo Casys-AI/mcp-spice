@@ -18,6 +18,7 @@ import {
 } from "../src/api/simulation-receipts.ts";
 import type { JsonRecord, RuntimeIdentity } from "../src/api/simulation-receipts.ts";
 import { executeDocumentedSimulation } from "../src/api/documented-simulation.ts";
+import { NgspiceNotFoundError, SpiceError } from "../src/api/ngspice.ts";
 import { SpiceToolError } from "../src/api/tool-error.ts";
 import { allTools } from "../src/tools/mod.ts";
 
@@ -74,6 +75,26 @@ function successResult(netlistSha256: string): JsonRecord {
     node_voltages: { out: 2 },
     branch_currents_a: {},
     measurements: { out: { value: 2 } },
+    not_checked: ["documentary test only"],
+    input_artifact: { sha256: netlistSha256, bytes: NETLIST.length },
+  };
+}
+
+function tranSuccessResult(netlistSha256: string): JsonRecord {
+  return {
+    node_stats: {
+      out: {
+        min_v: 1,
+        max_v: 2,
+        final_v: 2,
+        min_at_s: 0,
+        max_at_s: 0.1,
+        final_at_s: 0.1,
+      },
+    },
+    branch_current_stats_a: {},
+    measurements: { out: { value: 2 } },
+    simulation: { n_points: 2, tstop_s: 0.1 },
     not_checked: ["documentary test only"],
     input_artifact: { sha256: netlistSha256, bytes: NETLIST.length },
   };
@@ -199,6 +220,111 @@ Deno.test("receipt and result readback fail closed on exact-byte corruption", as
   });
 });
 
+Deno.test("direct result readback refuses symlink, FIFO, and oversized objects", async () => {
+  const cases = [
+    {
+      name: "symlink",
+      reason: "not_regular_file",
+      prepare: async (root: string, path: string) => {
+        const outside = join(root, "outside-result");
+        await Deno.writeTextFile(outside, "not-a-result");
+        await Deno.symlink(outside, path);
+      },
+    },
+    {
+      name: "FIFO",
+      reason: "not_regular_file",
+      prepare: async (_root: string, path: string) => {
+        const output = await new Deno.Command("mkfifo", { args: [path] }).output();
+        assert(output.success, "mkfifo must create the test result object");
+      },
+    },
+    {
+      name: "oversized regular file",
+      reason: "too_large",
+      prepare: async (_root: string, path: string) => {
+        await Deno.writeFile(path, new Uint8Array());
+        await Deno.truncate(path, 2 * 1024 * 1024);
+      },
+    },
+  ];
+  for (const fixture of cases) {
+    await withStores(async (root) => {
+      const input = await start();
+      const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+      const published = await publishSimulationOutcome({
+        request_sha256: started.request_sha256,
+        dispatch: started.dispatch,
+        execution_state: "succeeded",
+        result: successResult(input.netlist_sha256),
+      });
+      const resultPath = join(root, "receipts", "results", published.outcome_sha256);
+      await Deno.remove(resultPath);
+      await fixture.prepare(root, resultPath);
+
+      const error = await assertRejects(
+        () => getSimulationResult(published.outcome_sha256),
+        SpiceToolError,
+      );
+      assertEquals(error.code, "simulation_result_corrupt", fixture.name);
+      assertEquals(error.context.reason, fixture.reason, fixture.name);
+    });
+  }
+});
+
+Deno.test("outcome collision readback refuses unsafe existing durable objects", async () => {
+  const cases = [
+    {
+      name: "symlink",
+      expectedCode: "simulation_result_corrupt",
+      prepare: async (root: string, path: string) => {
+        const outside = join(root, "outside-result");
+        await Deno.writeTextFile(outside, "not-a-result");
+        await Deno.symlink(outside, path);
+      },
+    },
+    {
+      name: "FIFO",
+      expectedCode: "simulation_result_corrupt",
+      prepare: async (_root: string, path: string) => {
+        const output = await new Deno.Command("mkfifo", { args: [path] }).output();
+        assert(output.success, "mkfifo must create the test collision target");
+      },
+    },
+    {
+      name: "oversized regular file",
+      expectedCode: "simulation_immutable_record_conflict",
+      prepare: async (_root: string, path: string) => {
+        await Deno.writeFile(path, new Uint8Array());
+        await Deno.truncate(path, 8 * 1024 * 1024);
+      },
+    },
+  ];
+  for (const fixture of cases) {
+    await withStores(async (root) => {
+      const input = await start();
+      const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+      const result = successResult(input.netlist_sha256);
+      const outcomeSha256 = await sha256Hex(canonicalJsonBytes(result));
+      const resultsDir = join(root, "receipts", "results");
+      await Deno.mkdir(resultsDir, { recursive: true });
+      await fixture.prepare(root, join(resultsDir, outcomeSha256));
+
+      const error = await assertRejects(
+        () =>
+          publishSimulationOutcome({
+            request_sha256: started.request_sha256,
+            dispatch: started.dispatch,
+            execution_state: "succeeded",
+            result,
+          }),
+        SpiceToolError,
+      );
+      assertEquals(error.code, fixture.expectedCode, fixture.name);
+    });
+  }
+});
+
 Deno.test("dispatch runtime and terminal publication corruption fail closed", async () => {
   await withStores(async (root) => {
     const input = await start();
@@ -273,6 +399,321 @@ Deno.test("readback refuses a documentary symlink outside the durable root", asy
     );
     assertEquals(error.code, "simulation_dispatch_corrupt");
   });
+});
+
+Deno.test("documentary getters reject namespace-parent symlinks outside the store", async () => {
+  await withStores(async (root) => {
+    const input = await start();
+    const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+    const dispatches = join(root, "receipts", "dispatches");
+    await Deno.rename(dispatches, join(root, "outside-dispatches"));
+    await Deno.symlink(join(root, "outside-dispatches"), dispatches);
+    const error = await assertRejects(
+      () => getSimulationDispatch(started.request_sha256),
+      SpiceToolError,
+    );
+    assertEquals(error.code, "simulation_dispatch_corrupt");
+    assertEquals(error.context.reason, "unsafe_parent");
+  });
+
+  await withStores(async (root) => {
+    const input = await start();
+    const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+    const published = await publishSimulationOutcome({
+      request_sha256: started.request_sha256,
+      dispatch: started.dispatch,
+      execution_state: "succeeded",
+      result: successResult(input.netlist_sha256),
+    });
+    const results = join(root, "receipts", "results");
+    await Deno.rename(results, join(root, "outside-results"));
+    await Deno.symlink(join(root, "outside-results"), results);
+    const error = await assertRejects(
+      () => getSimulationResult(published.outcome_sha256),
+      SpiceToolError,
+    );
+    assertEquals(error.code, "simulation_result_corrupt");
+    assertEquals(error.context.reason, "unsafe_parent");
+  });
+
+  await withStores(async (root) => {
+    const input = await start();
+    const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+    const published = await publishSimulationOutcome({
+      request_sha256: started.request_sha256,
+      dispatch: started.dispatch,
+      execution_state: "succeeded",
+      result: successResult(input.netlist_sha256),
+    });
+    const receipts = join(root, "receipts", "receipts");
+    await Deno.rename(receipts, join(root, "outside-receipts"));
+    await Deno.symlink(join(root, "outside-receipts"), receipts);
+    const error = await assertRejects(
+      () => getSimulationReceipt(published.receipt_sha256),
+      SpiceToolError,
+    );
+    assertEquals(error.code, "simulation_receipt_corrupt");
+    assertEquals(error.context.reason, "unsafe_parent");
+  });
+});
+
+Deno.test("durable outcomes are a closed union bound to their dispatch", async () => {
+  await withStores(async (root) => {
+    const input = await start();
+    const invalidOutcomes: Array<{
+      name: string;
+      execution_state: "succeeded" | "failed";
+      result: JsonRecord;
+      reason: string;
+    }> = [
+      {
+        name: "succeeded result with error fields",
+        execution_state: "succeeded",
+        result: { ...successResult(input.netlist_sha256), code: "ngspice_timeout" },
+        reason: "failure_keys_invalid",
+      },
+      {
+        name: "succeeded result with a different analysis kind",
+        execution_state: "succeeded",
+        result: tranSuccessResult(input.netlist_sha256),
+        reason: "analysis_kind_mismatch",
+      },
+      {
+        name: "succeeded result with a different input artifact",
+        execution_state: "succeeded",
+        result: {
+          ...successResult(input.netlist_sha256),
+          input_artifact: { sha256: "a".repeat(64), bytes: NETLIST.length },
+        },
+        reason: "input_artifact_netlist_sha256_mismatch",
+      },
+      {
+        name: "succeeded result with a different input artifact byte length",
+        execution_state: "succeeded",
+        result: {
+          ...successResult(input.netlist_sha256),
+          input_artifact: {
+            sha256: input.netlist_sha256,
+            bytes: NETLIST.length + 1,
+          },
+        },
+        reason: "input_artifact_netlist_bytes_mismatch",
+      },
+      {
+        name: "succeeded result with a negative input artifact byte length",
+        execution_state: "succeeded",
+        result: {
+          ...successResult(input.netlist_sha256),
+          input_artifact: { sha256: input.netlist_sha256, bytes: -1 },
+        },
+        reason: "input_artifact.bytes_invalid",
+      },
+      {
+        name: "succeeded result with a fractional input artifact byte length",
+        execution_state: "succeeded",
+        result: {
+          ...successResult(input.netlist_sha256),
+          input_artifact: { sha256: input.netlist_sha256, bytes: NETLIST.length + 0.5 },
+        },
+        reason: "input_artifact.bytes_invalid",
+      },
+      {
+        name: "failed result with a success shape",
+        execution_state: "failed",
+        result: successResult(input.netlist_sha256),
+        reason: "failed_result_not_error_envelope",
+      },
+    ];
+
+    for (const [index, fixture] of invalidOutcomes.entries()) {
+      const started = await beginSimulationDispatch({
+        analysis_kind: "op",
+        ...input,
+        normalized_request: { ...input.normalized_request, timeout_s: 30 + index },
+      });
+      const error = await assertRejects(
+        () =>
+          publishSimulationOutcome({
+            request_sha256: started.request_sha256,
+            dispatch: started.dispatch,
+            execution_state: fixture.execution_state,
+            result: fixture.result,
+          }),
+        SpiceToolError,
+      );
+      assertEquals(error.code, "simulation_outcome_invalid", fixture.name);
+      assertEquals(error.context.reason, fixture.reason, fixture.name);
+    }
+
+    const malformed = {
+      ...successResult(input.netlist_sha256),
+      code: "ngspice_timeout",
+    };
+    const bytes = canonicalJsonBytes(malformed);
+    const outcomeSha256 = await sha256Hex(bytes);
+    const results = join(root, "receipts", "results");
+    await Deno.mkdir(results, { recursive: true });
+    await Deno.writeFile(join(results, outcomeSha256), bytes, { mode: 0o400 });
+    const error = await assertRejects(
+      () => getSimulationResult(outcomeSha256),
+      SpiceToolError,
+    );
+    assertEquals(error.code, "simulation_result_corrupt");
+    assertEquals(error.context.reason, "outcome_failure_keys_invalid");
+
+    for (const artifactBytes of [-1, NETLIST.length + 0.5]) {
+      const malformedArtifact = {
+        ...successResult(input.netlist_sha256),
+        input_artifact: {
+          sha256: input.netlist_sha256,
+          bytes: artifactBytes,
+        },
+      };
+      const malformedArtifactBytes = canonicalJsonBytes(malformedArtifact);
+      const malformedArtifactSha256 = await sha256Hex(malformedArtifactBytes);
+      await Deno.writeFile(
+        join(results, malformedArtifactSha256),
+        malformedArtifactBytes,
+        { mode: 0o400 },
+      );
+      const artifactError = await assertRejects(
+        () => getSimulationResult(malformedArtifactSha256),
+        SpiceToolError,
+      );
+      assertEquals(artifactError.code, "simulation_result_corrupt");
+      assertEquals(
+        artifactError.context.reason,
+        "outcome_input_artifact.bytes_invalid",
+      );
+    }
+
+    const started = await beginSimulationDispatch({
+      analysis_kind: "op",
+      ...input,
+      normalized_request: { ...input.normalized_request, timeout_s: 99 },
+    });
+    const published = await publishSimulationOutcome({
+      request_sha256: started.request_sha256,
+      dispatch: started.dispatch,
+      execution_state: "succeeded",
+      result: successResult(input.netlist_sha256),
+    });
+    const originalReceipt = await getSimulationReceipt(published.receipt_sha256);
+    const forgedOutcomes: Array<{
+      name: string;
+      result: JsonRecord;
+      reason: string;
+    }> = [
+      {
+        name: "different analysis kind",
+        result: tranSuccessResult(input.netlist_sha256),
+        reason: "outcome_analysis_kind_mismatch",
+      },
+      {
+        name: "failed result for a succeeded receipt",
+        result: {
+          code: "ngspice_timeout",
+          context: { timeoutMs: 30_000 },
+          recovery: "Inspect the circuit before submitting a distinct request.",
+        },
+        reason: "outcome_succeeded_result_not_persisted_success",
+      },
+      {
+        name: "different input artifact",
+        result: {
+          ...successResult(input.netlist_sha256),
+          input_artifact: { sha256: "a".repeat(64), bytes: NETLIST.length },
+        },
+        reason: "outcome_input_artifact_netlist_sha256_mismatch",
+      },
+      {
+        name: "different input artifact byte length",
+        result: {
+          ...successResult(input.netlist_sha256),
+          input_artifact: {
+            sha256: input.netlist_sha256,
+            bytes: NETLIST.length + 1,
+          },
+        },
+        reason: "outcome_input_artifact_netlist_bytes_mismatch",
+      },
+    ];
+    for (const fixture of forgedOutcomes) {
+      const forgedOutcomeBytes = canonicalJsonBytes(fixture.result);
+      const forgedOutcomeSha256 = await sha256Hex(forgedOutcomeBytes);
+      await Deno.writeFile(join(results, forgedOutcomeSha256), forgedOutcomeBytes, {
+        mode: 0o400,
+      });
+      const forgedReceiptBytes = canonicalJsonBytes({
+        ...originalReceipt,
+        outcome_sha256: forgedOutcomeSha256,
+      });
+      const forgedReceiptSha256 = await sha256Hex(forgedReceiptBytes);
+      await Deno.writeFile(
+        join(root, "receipts", "receipts", forgedReceiptSha256),
+        forgedReceiptBytes,
+        { mode: 0o400 },
+      );
+      const receiptError = await assertRejects(
+        () => getSimulationReceipt(forgedReceiptSha256),
+        SpiceToolError,
+      );
+      assertEquals(receiptError.code, "simulation_receipt_corrupt", fixture.name);
+      assertEquals(receiptError.context.reason, fixture.reason, fixture.name);
+    }
+  });
+});
+
+Deno.test("receipt readback refuses unsafe netlist CAS objects", async () => {
+  const cases = [
+    {
+      name: "symlink",
+      reason: "not_regular_file",
+      prepare: async (root: string, path: string) => {
+        const outside = join(root, "outside-netlist");
+        await Deno.writeTextFile(outside, NETLIST);
+        await Deno.symlink(outside, path);
+      },
+    },
+    {
+      name: "FIFO",
+      reason: "not_regular_file",
+      prepare: async (_root: string, path: string) => {
+        const output = await new Deno.Command("mkfifo", { args: [path] }).output();
+        assert(output.success, "mkfifo must create the test netlist object");
+      },
+    },
+    {
+      name: "oversized regular file",
+      reason: "too_large",
+      prepare: async (_root: string, path: string) => {
+        await Deno.writeFile(path, new Uint8Array());
+        await Deno.truncate(path, 2 * 1024 * 1024);
+      },
+    },
+  ];
+  for (const fixture of cases) {
+    await withStores(async (root) => {
+      const input = await start();
+      const started = await beginSimulationDispatch({ analysis_kind: "op", ...input });
+      const published = await publishSimulationOutcome({
+        request_sha256: started.request_sha256,
+        dispatch: started.dispatch,
+        execution_state: "succeeded",
+        result: successResult(input.netlist_sha256),
+      });
+      const netlistPath = join(root, "inputs", input.netlist_sha256);
+      await Deno.remove(netlistPath);
+      await fixture.prepare(root, netlistPath);
+
+      const error = await assertRejects(
+        () => getSimulationReceipt(published.receipt_sha256),
+        SpiceToolError,
+      );
+      assertEquals(error.code, "simulation_netlist_corrupt", fixture.name);
+      assertEquals(error.context.reason, fixture.reason, fixture.name);
+    });
+  }
 });
 
 Deno.test("receipt readback verifies the runtime-linked dispatch chain", async () => {
@@ -385,6 +826,59 @@ Deno.test("a changed runtime cannot unblock an acknowledged request", async () =
   });
 });
 
+Deno.test("runtime identity capture kills an ngspice version process at its fixed deadline", async () => {
+  const binDir = await Deno.makeTempDir({ prefix: "spice-fake-ngspice-" });
+  const executable = join(binDir, "ngspice");
+  await Deno.writeTextFile(
+    executable,
+    "#!/bin/sh\nwhile :; do :; done\n",
+  );
+  await Deno.chmod(executable, 0o755);
+  const priorPath = Deno.env.get("PATH");
+  Deno.env.set("PATH", `${binDir}:${priorPath ?? ""}`);
+  try {
+    const startedAt = Date.now();
+    const error = await assertRejects(
+      () => captureRuntimeIdentity(),
+      SpiceToolError,
+    );
+    assertEquals(error.code, "ngspice_runtime_identity_unavailable");
+    assertEquals(error.context.reason, "timeout");
+    assert(
+      Date.now() - startedAt < 3_000,
+      "version capture must return shortly after its fixed deadline",
+    );
+  } finally {
+    if (priorPath === undefined) Deno.env.delete("PATH");
+    else Deno.env.set("PATH", priorPath);
+    await Deno.remove(binDir, { recursive: true });
+  }
+});
+
+Deno.test("runtime identity hashes its normalized persisted banner", async () => {
+  const binDir = await Deno.makeTempDir({ prefix: "spice-fake-ngspice-" });
+  const executable = join(binDir, "ngspice");
+  await Deno.writeTextFile(
+    executable,
+    "#!/bin/sh\nprintf '  ngspice test runtime 44.2  \\n\\n'\n",
+  );
+  await Deno.chmod(executable, 0o755);
+  const priorPath = Deno.env.get("PATH");
+  Deno.env.set("PATH", `${binDir}:${priorPath ?? ""}`);
+  try {
+    const identity = await captureRuntimeIdentity();
+    assertEquals(identity.ngspice_version, "ngspice test runtime 44.2");
+    assertEquals(
+      identity.ngspice_version_sha256,
+      await sha256Hex(new TextEncoder().encode(identity.ngspice_version)),
+    );
+  } finally {
+    if (priorPath === undefined) Deno.env.delete("PATH");
+    else Deno.env.set("PATH", priorPath);
+    await Deno.remove(binDir, { recursive: true });
+  }
+});
+
 Deno.test("in-process duplicate execution is single-flight rather than a second dispatch", async () => {
   await withStores(async () => {
     const binDir = await Deno.makeTempDir({ prefix: "spice-fake-ngspice-" });
@@ -407,13 +901,13 @@ Deno.test("in-process duplicate execution is single-flight rather than a second 
           execute: async () => {
             executions += 1;
             await new Promise((resolve) => setTimeout(resolve, 20));
-            return { value: 2 };
+            return successResult(input.netlist_sha256);
           },
         });
       const [left, right] = await Promise.all([run(), run()]);
       assertEquals(executions, 1);
-      assertEquals(left.result, { value: 2 });
-      assertEquals(right.result, { value: 2 });
+      assertEquals(left.result, successResult(input.netlist_sha256));
+      assertEquals(right.result, successResult(input.netlist_sha256));
       assertEquals(
         left.documentary_receipt.receipt_sha256,
         right.documentary_receipt.receipt_sha256,
@@ -485,7 +979,101 @@ Deno.test("an ACK-only R1 dispatch after an R2 restart executes zero provider ca
   });
 });
 
-Deno.test("terminal typed failures return durable references and replay without execution", async () => {
+Deno.test("terminal engine failures preserve SpiceError and receipt identities on replay", async () => {
+  await withStores(async () => {
+    const binDir = await Deno.makeTempDir({ prefix: "spice-fake-ngspice-" });
+    const executable = join(binDir, "ngspice");
+    await Deno.writeTextFile(
+      executable,
+      "#!/bin/sh\nprintf 'ngspice test runtime 44.2\\n'\n",
+    );
+    await Deno.chmod(executable, 0o755);
+    const priorPath = Deno.env.get("PATH");
+    Deno.env.set("PATH", `${binDir}:${priorPath ?? ""}`);
+    try {
+      const input = await start();
+      let executions = 0;
+      const run = () =>
+        executeDocumentedSimulation({
+          analysis_kind: "op",
+          netlist_sha256: input.netlist_sha256,
+          normalized_request: input.normalized_request,
+          execute: () => {
+            executions += 1;
+            return Promise.reject(
+              new SpiceError("private engine diagnostics", {
+                code: "ngspice_timeout",
+                context: { timeoutMs: 30_000 },
+                recovery: "Inspect the circuit before submitting a distinct request.",
+              }),
+            );
+          },
+        });
+      const first = await assertRejects(run, SpiceError);
+      assertEquals(first.code, "ngspice_timeout");
+      assertEquals(first.context.execution_state, "failed");
+      assert(typeof first.context.request_sha256 === "string");
+      assert(typeof first.context.dispatch_sha256 === "string");
+      assert(typeof first.context.receipt_sha256 === "string");
+      assert(typeof first.context.outcome_sha256 === "string");
+
+      const replay = await assertRejects(run, SpiceError);
+      assertEquals(replay.code, "ngspice_timeout");
+      assertEquals(replay.context, first.context);
+      assertEquals(executions, 1);
+    } finally {
+      if (priorPath === undefined) Deno.env.delete("PATH");
+      else Deno.env.set("PATH", priorPath);
+      await Deno.remove(binDir, { recursive: true });
+    }
+  });
+});
+
+Deno.test("terminal missing-engine failures preserve NgspiceNotFoundError and receipt identities on replay", async () => {
+  await withStores(async () => {
+    const binDir = await Deno.makeTempDir({ prefix: "spice-fake-ngspice-" });
+    const executable = join(binDir, "ngspice");
+    await Deno.writeTextFile(
+      executable,
+      "#!/bin/sh\nprintf 'ngspice test runtime 44.2\\n'\n",
+    );
+    await Deno.chmod(executable, 0o755);
+    const priorPath = Deno.env.get("PATH");
+    Deno.env.set("PATH", `${binDir}:${priorPath ?? ""}`);
+    try {
+      const input = await start();
+      let executions = 0;
+      const run = () =>
+        executeDocumentedSimulation({
+          analysis_kind: "op",
+          netlist_sha256: input.netlist_sha256,
+          normalized_request: input.normalized_request,
+          execute: () => {
+            executions += 1;
+            return Promise.reject(new NgspiceNotFoundError());
+          },
+        });
+      const first = await assertRejects(run, NgspiceNotFoundError);
+      assertEquals(first.code, "ngspice_unavailable");
+      assertEquals(first.context.execution_state, "failed");
+      assert(typeof first.context.request_sha256 === "string");
+      assert(typeof first.context.dispatch_sha256 === "string");
+      assert(typeof first.context.receipt_sha256 === "string");
+      assert(typeof first.context.outcome_sha256 === "string");
+
+      const replay = await assertRejects(run, NgspiceNotFoundError);
+      assertEquals(replay.code, "ngspice_unavailable");
+      assertEquals(replay.context, first.context);
+      assertEquals(executions, 1);
+    } finally {
+      if (priorPath === undefined) Deno.env.delete("PATH");
+      else Deno.env.set("PATH", priorPath);
+      await Deno.remove(binDir, { recursive: true });
+    }
+  });
+});
+
+Deno.test("terminal non-engine tool failures remain SpiceToolError on replay", async () => {
   await withStores(async () => {
     const binDir = await Deno.makeTempDir({ prefix: "spice-fake-ngspice-" });
     const executable = join(binDir, "ngspice");
@@ -508,23 +1096,20 @@ Deno.test("terminal typed failures return durable references and replay without 
             executions += 1;
             return Promise.reject(
               new SpiceToolError(
-                "ngspice_timeout",
-                { timeoutMs: 30_000 },
-                "Inspect the circuit before submitting a distinct request.",
+                "simulation_provider_policy_refused",
+                { policy: "test" },
+                "Inspect the provider policy before submitting a distinct request.",
               ),
             );
           },
         });
       const first = await assertRejects(run, SpiceToolError);
-      assertEquals(first.code, "ngspice_timeout");
+      assertEquals(first.code, "simulation_provider_policy_refused");
       assertEquals(first.context.execution_state, "failed");
-      assert(typeof first.context.request_sha256 === "string");
-      assert(typeof first.context.dispatch_sha256 === "string");
       assert(typeof first.context.receipt_sha256 === "string");
-      assert(typeof first.context.outcome_sha256 === "string");
 
       const replay = await assertRejects(run, SpiceToolError);
-      assertEquals(replay.code, "ngspice_timeout");
+      assertEquals(replay.code, "simulation_provider_policy_refused");
       assertEquals(replay.context, first.context);
       assertEquals(executions, 1);
     } finally {

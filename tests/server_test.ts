@@ -83,7 +83,60 @@ Deno.test("documentary receipt schemas distinguish request and dispatch identiti
     assert(required.includes("dispatch_sha256"));
     assert(required.includes("receipt_sha256"));
     assert(required.includes("outcome_sha256"));
+    const outerRequired = output.required as string[];
+    assert(outerRequired.includes("documentary_receipt"));
   }
+});
+
+Deno.test("documentary readback schemas expose the durable record shapes", () => {
+  const receiptTool = allTools.find((tool) =>
+    tool.name === "spice_simulation_receipt_get"
+  );
+  assert(receiptTool);
+  const receiptOutput = receiptTool.outputSchema as Record<string, unknown>;
+  const receiptProperties = receiptOutput.properties as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const receipt = receiptProperties.receipt;
+  assertEquals(receipt.additionalProperties, false);
+  assert((receipt.required as string[]).includes("runtime_identity"));
+  assert((receipt.required as string[]).includes("normalized_request"));
+  const receiptFields = receipt.properties as Record<string, Record<string, unknown>>;
+  assertEquals(receiptFields.runtime_identity.additionalProperties, false);
+  assert(Array.isArray(receiptFields.normalized_request.oneOf));
+
+  const resultTool = allTools.find((tool) =>
+    tool.name === "spice_simulation_result_get"
+  );
+  assert(resultTool);
+  const resultOutput = resultTool.outputSchema as Record<string, unknown>;
+  const resultProperties = resultOutput.properties as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const outcomeVariants = resultProperties.result.oneOf as Record<string, unknown>[];
+  assert(Array.isArray(outcomeVariants));
+  for (const success of outcomeVariants.slice(0, 3)) {
+    const required = success.required as string[];
+    assert(!required.includes("documentary_receipt"));
+    const properties = success.properties as Record<string, Record<string, unknown>>;
+    const artifact = properties.input_artifact;
+    assertEquals(artifact.additionalProperties, false);
+    assertEquals(artifact.required, ["sha256", "bytes"]);
+  }
+
+  const dispatchTool = allTools.find((tool) =>
+    tool.name === "spice_simulation_dispatch_get"
+  );
+  assert(dispatchTool);
+  const dispatchOutput = dispatchTool.outputSchema as Record<string, unknown>;
+  const dispatchProperties = dispatchOutput.properties as Record<
+    string,
+    Record<string, unknown>
+  >;
+  assertEquals(dispatchProperties.dispatch.additionalProperties, false);
+  assertEquals(dispatchProperties.publication.additionalProperties, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -245,7 +298,13 @@ Deno.test(
       request_sha256: started.request_sha256,
       dispatch: started.dispatch,
       execution_state: "succeeded",
-      result: { node_voltages: { in: 1 }, input_artifact: { sha256: netlist.sha256 } },
+      result: {
+        node_voltages: { in: 1 },
+        branch_currents_a: {},
+        measurements: { in: { value: 1 } },
+        not_checked: ["documentary test only"],
+        input_artifact: { sha256: netlist.sha256, bytes: netlist.bytes },
+      },
     });
 
     const { app } = createSpiceServer({ logger: () => {} });
@@ -267,7 +326,10 @@ Deno.test(
       assertEquals(structured.outcome_sha256, published.outcome_sha256);
       assertEquals(structured.result, {
         node_voltages: { in: 1 },
-        input_artifact: { sha256: netlist.sha256 },
+        branch_currents_a: {},
+        measurements: { in: { value: 1 } },
+        not_checked: ["documentary test only"],
+        input_artifact: { sha256: netlist.sha256, bytes: netlist.bytes },
       });
     } finally {
       await http.shutdown();
@@ -309,6 +371,10 @@ Deno.test(
       assert(
         properties.documentary_receipt !== undefined,
         `${tool.name}: outputSchema must declare documentary_receipt`,
+      );
+      assert(
+        required.includes("documentary_receipt"),
+        `${tool.name}: outputSchema.required must include documentary_receipt`,
       );
     }
   },

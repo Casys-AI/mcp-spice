@@ -112,7 +112,7 @@ const INPUT_SCHEMA: Record<string, unknown> = {
   },
 };
 
-const OUTPUT_SCHEMA: Record<string, unknown> = {
+export const TRAN_OUTPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
   required: [
@@ -122,6 +122,7 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
     "simulation",
     "not_checked",
     "input_artifact",
+    "documentary_receipt",
   ],
   properties: {
     node_stats: {
@@ -271,7 +272,7 @@ export const tranTool: SpiceTool = {
     "The tool measures; it does not declare circuit compliance.",
   category: "simulation",
   inputSchema: INPUT_SCHEMA,
-  outputSchema: OUTPUT_SCHEMA,
+  outputSchema: TRAN_OUTPUT_SCHEMA,
   annotations: {
     readOnlyHint: false, // writes to a server-controlled temp dir
     destructiveHint: false,

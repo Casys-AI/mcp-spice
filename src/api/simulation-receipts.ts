@@ -21,16 +21,23 @@
  */
 
 import { dirname, join } from "@std/path";
-import { EXECUTION_BUDGETS_VERSION } from "./execution-budgets.ts";
+import { EXECUTION_BUDGETS_VERSION, NETLIST_MAX_BYTES } from "./execution-budgets.ts";
+import { readImmutableFileWithinLimit } from "./immutable-file.ts";
 import { sha256Hex } from "./netlist-artifact.ts";
-import { getNetlistPath } from "./netlist-store.ts";
-import { NgspiceNotFoundError } from "./ngspice.ts";
+import { normalizeSha256, resolveNetlistStoreDir } from "./netlist-store.ts";
+import {
+  NgspiceNotFoundError,
+  readNgspiceOutputWithinLimit,
+  SpiceError,
+} from "./ngspice.ts";
 import { isMachineReadableError, SpiceToolError } from "./tool-error.ts";
 
 export const MCP_SPICE_VERSION = "0.6.0";
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const MAX_RUNTIME_IDENTITY_BYTES = 8 * 1024;
+const MAX_DURABLE_DOCUMENT_BYTES = 1_048_576;
+const RUNTIME_IDENTITY_TIMEOUT_MS = 1_000;
 const ACKNOWLEDGED_PUBLICATION_WAIT_MS = 1_000;
 const ACKNOWLEDGED_PUBLICATION_POLL_MS = 50;
 
@@ -134,19 +141,64 @@ export function canonicalJsonBytes(value: JsonValue): Uint8Array {
  * dispatch is acknowledged because no provider process can be started.
  */
 export async function captureRuntimeIdentity(): Promise<RuntimeIdentity> {
-  let output: Deno.CommandOutput;
+  let child: Deno.ChildProcess;
   try {
-    output = await new Deno.Command("ngspice", {
+    child = new Deno.Command("ngspice", {
       args: ["--version"],
+      stdin: "null",
       stdout: "piped",
       stderr: "piped",
-    }).output();
+    }).spawn();
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) throw new NgspiceNotFoundError();
     throw error;
   }
 
-  const versionBytes = concatBytes(output.stdout, output.stderr);
+  let timedOut = false;
+  const kill = () => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* Process has already exited. */
+    }
+  };
+  const timer = setTimeout(() => {
+    timedOut = true;
+    kill();
+  }, RUNTIME_IDENTITY_TIMEOUT_MS);
+  const [statusResult, stdoutResult, stderrResult] = await Promise.allSettled([
+    child.status,
+    readNgspiceOutputWithinLimit(
+      child.stdout,
+      "stdout",
+      kill,
+      MAX_RUNTIME_IDENTITY_BYTES,
+    ),
+    readNgspiceOutputWithinLimit(
+      child.stderr,
+      "stderr",
+      kill,
+      MAX_RUNTIME_IDENTITY_BYTES,
+    ),
+  ]).finally(() => clearTimeout(timer));
+
+  if (timedOut) {
+    throw new SpiceToolError(
+      "ngspice_runtime_identity_unavailable",
+      { reason: "timeout", timeoutMs: RUNTIME_IDENTITY_TIMEOUT_MS },
+      "Restore an ngspice runtime that reports its version within the fixed identity-capture timeout before dispatching a simulation.",
+    );
+  }
+  if (stdoutResult.status === "rejected") {
+    throwRuntimeIdentityOutputFailure(stdoutResult.reason);
+  }
+  if (stderrResult.status === "rejected") {
+    throwRuntimeIdentityOutputFailure(stderrResult.reason);
+  }
+  if (statusResult.status === "rejected") throw statusResult.reason;
+
+  const output = statusResult.value;
+  const versionBytes = concatBytes(stdoutResult.value, stderrResult.value);
   if (!output.success) {
     throw new SpiceToolError(
       "ngspice_runtime_identity_unavailable",
@@ -191,7 +243,9 @@ export async function captureRuntimeIdentity(): Promise<RuntimeIdentity> {
     os: Deno.build.os,
     arch: Deno.build.arch,
     ngspice_version: ngspiceVersion,
-    ngspice_version_sha256: await sha256Hex(versionBytes),
+    ngspice_version_sha256: await sha256Hex(
+      new TextEncoder().encode(ngspiceVersion),
+    ),
   };
 }
 
@@ -273,6 +327,12 @@ export async function publishSimulationOutcome(input: {
   assertSameCanonicalDocument(dispatch, input.dispatch, "simulation_dispatch_mismatch");
   const executionState = assertExecutionState(input.execution_state);
   const result = assertJsonRecord(input.result, "result");
+  await assertOutcomeForWrite(
+    result,
+    dispatch.analysis_kind,
+    executionState,
+    dispatch.netlist_sha256,
+  );
 
   // Result and receipt must both be durable before a publication can make the
   // dispatch visible as complete. A crash before the final write remains
@@ -316,7 +376,9 @@ export async function getSimulationResult(outcomeSha256: string): Promise<JsonRe
     "invalid_outcome_sha256",
     "outcome_sha256",
   );
-  return assertJsonRecord(await readDocument("results", digest), "result");
+  const result = assertJsonRecord(await readDocument("results", digest), "result");
+  assertOutcomeForResultRead(result, digest);
+  return result;
 }
 
 /** Exact receipt readback plus verification of the linked result identity. */
@@ -343,8 +405,9 @@ export async function getSimulationReceipt(
   ) {
     throw corruptRecordError("receipts", digest, "dispatch_binding_mismatch");
   }
-  await assertNetlistBinding(receipt.netlist_sha256);
-  await getSimulationResult(receipt.outcome_sha256);
+  const netlistBytes = await assertNetlistBinding(receipt.netlist_sha256);
+  const result = await getSimulationResult(receipt.outcome_sha256);
+  assertOutcomeForReceiptRead(result, receipt, digest, netlistBytes);
   return receipt;
 }
 
@@ -397,18 +460,24 @@ export function throwPersistedSimulationFailure(
       "Inspect the documentary receipt and durable result before deciding whether a new, distinct request is appropriate.",
     );
   }
-  throw new SpiceToolError(
-    code,
-    publication === undefined ? context : {
-      ...context,
-      request_sha256: publication.request_sha256,
-      dispatch_sha256: publication.dispatch_sha256,
-      receipt_sha256: publication.receipt_sha256,
-      outcome_sha256: publication.outcome_sha256,
-      execution_state: publication.execution_state,
-    },
-    recovery,
-  );
+  const durableContext = publication === undefined ? context : {
+    ...context,
+    request_sha256: publication.request_sha256,
+    dispatch_sha256: publication.dispatch_sha256,
+    receipt_sha256: publication.receipt_sha256,
+    outcome_sha256: publication.outcome_sha256,
+    execution_state: publication.execution_state,
+  };
+  if (code === "ngspice_unavailable") {
+    throw new NgspiceNotFoundError({ context: durableContext, recovery });
+  }
+  if (code.startsWith("ngspice_")) {
+    throw new SpiceError(
+      "A durable ngspice simulation failure was replayed. Inspect its documentary receipt identities before submitting a distinct request.",
+      { code, context: durableContext, recovery },
+    );
+  }
+  throw new SpiceToolError(code, durableContext, recovery);
 }
 
 /** A canonical failure result contains only the standard machine-readable envelope. */
@@ -529,14 +598,7 @@ async function putImmutableBytes(
       return true;
     } catch (error) {
       if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
-      const existing = await Deno.readFile(destination);
-      if (!equalBytes(existing, bytes)) {
-        throw new SpiceToolError(
-          "simulation_immutable_record_conflict",
-          { namespace, identity: name },
-          "Do not overwrite a durable simulation record. Inspect the existing record for corruption or a conflicting writer.",
-        );
-      }
+      await readDocument(namespace, name, bytes);
       return false;
     }
   } finally {
@@ -547,27 +609,23 @@ async function putImmutableBytes(
 async function readDocument(
   namespace: "dispatches" | "results" | "receipts" | "publications",
   identity: string,
+  expectedBytes?: Uint8Array,
 ): Promise<JsonRecord> {
   const storeDir = resolveReceiptStoreDir();
   const path = join(storeDir, namespace, identity);
   let bytes: Uint8Array;
   try {
-    const info = await Deno.lstat(path);
-    if (!info.isFile || info.isSymlink) {
-      throw corruptRecordError(namespace, identity, "not_regular_file");
-    }
-    const [realStoreDir, realPath] = await Promise.all([
-      Deno.realPath(storeDir),
-      Deno.realPath(path),
-    ]);
-    if (realPath !== join(realStoreDir, namespace, identity)) {
-      throw corruptRecordError(namespace, identity, "outside_store_root");
-    }
-    bytes = await Deno.readFile(path);
-    const after = await Deno.lstat(path);
-    if (!after.isFile || after.isSymlink || await Deno.realPath(path) !== realPath) {
-      throw corruptRecordError(namespace, identity, "changed_during_read");
-    }
+    bytes = await readImmutableFileWithinLimit({
+      root: storeDir,
+      sourcePath: path,
+      maxBytes: MAX_DURABLE_DOCUMENT_BYTES,
+      expectedBytes,
+      fail: (reason) =>
+        expectedBytes !== undefined &&
+          (reason === "too_large" || reason === "content_mismatch")
+          ? immutableRecordConflict(namespace, identity)
+          : corruptRecordError(namespace, identity, reason),
+    });
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
       throw new SpiceToolError(
@@ -660,7 +718,7 @@ async function assertPublicationLinks(
   const receipt = assertReceipt(
     await readDocument("receipts", publication.receipt_sha256),
   );
-  await assertNetlistBinding(receipt.netlist_sha256);
+  const netlistBytes = await assertNetlistBinding(receipt.netlist_sha256);
   const result = await getSimulationResult(publication.outcome_sha256);
   if (
     receipt.request_sha256 !== requestSha256 ||
@@ -679,48 +737,387 @@ async function assertPublicationLinks(
       "receipt_binding_mismatch",
     );
   }
-  if (publication.execution_state === "failed") {
-    // Validate the stored failure envelope while leaving the original failure
-    // available for exact result readback.
-    const ignored = result;
-    try {
-      throwPersistedSimulationFailure(ignored);
-    } catch (error) {
-      if (
-        !(error instanceof SpiceToolError) ||
-        error.code === "simulation_failure_record_invalid"
-      ) {
-        throw corruptRecordError(
-          "publications",
-          requestSha256,
-          "failure_result_invalid",
-        );
-      }
-    }
-  }
+  assertOutcomeForPublicationRead(
+    result,
+    dispatch,
+    publication,
+    requestSha256,
+    netlistBytes,
+  );
 }
 
-async function assertNetlistBinding(netlistSha256: string): Promise<void> {
-  let path: string;
+async function assertNetlistBinding(netlistSha256: string): Promise<number> {
+  const storeDir = resolveNetlistStoreDir();
+  const digest = normalizeSha256(netlistSha256, "simulation_receipt_readback");
+  const path = join(storeDir, digest);
   try {
-    path = await getNetlistPath(netlistSha256, "simulation_receipt_readback");
+    const bytes = await readImmutableFileWithinLimit({
+      root: storeDir,
+      sourcePath: path,
+      maxBytes: NETLIST_MAX_BYTES,
+      fail: (reason) => netlistCorruptError(digest, reason),
+    });
+    if (await sha256Hex(bytes) !== digest) {
+      throw netlistCorruptError(digest, "sha256_mismatch");
+    }
+    return bytes.length;
   } catch (error) {
-    if (error instanceof SpiceToolError && error.code === "netlist_not_in_store") {
+    if (error instanceof Deno.errors.NotFound) {
       throw new SpiceToolError(
         "simulation_netlist_not_found",
-        { netlist_sha256: netlistSha256 },
+        { netlist_sha256: digest },
         "The receipt cannot be verified without its durable netlist bytes. Restore the immutable netlist object before using this receipt.",
       );
     }
     throw error;
   }
-  const bytes = await Deno.readFile(path);
-  if (await sha256Hex(bytes) !== netlistSha256) {
-    throw new SpiceToolError(
-      "simulation_netlist_corrupt",
-      { netlist_sha256: netlistSha256 },
-      "Do not use this receipt. Restore the durable netlist bytes from an authoritative copy.",
+}
+
+/**
+ * The public tool schemas describe these records, but durable storage must not
+ * rely on a caller having passed through an MCP schema validator. Keep the
+ * discriminator and binding checks here, beside the persisted links, so a
+ * forged result cannot make an acknowledged dispatch look complete.
+ */
+async function assertOutcomeForWrite(
+  result: JsonRecord,
+  analysisKind: AnalysisKind,
+  executionState: SimulationExecutionState,
+  netlistSha256: string,
+): Promise<void> {
+  try {
+    const outcome = assertOutcomeForBinding(
+      result,
+      analysisKind,
+      executionState,
+      netlistSha256,
     );
+    if (outcome !== "failed") {
+      const netlistBytes = await assertNetlistBinding(netlistSha256);
+      assertOutcomeArtifactBytes(result, netlistBytes);
+    }
+  } catch (error) {
+    if (error instanceof OutcomeValidationError) {
+      throw new SpiceToolError(
+        "simulation_outcome_invalid",
+        { reason: error.reason },
+        "Publish a bounded outcome matching the acknowledged analysis kind, execution state, and netlist identity.",
+      );
+    }
+    throw error;
+  }
+}
+
+function assertOutcomeForResultRead(result: JsonRecord, outcomeSha256: string): void {
+  try {
+    assertPersistedOutcome(result);
+  } catch (error) {
+    if (error instanceof OutcomeValidationError) {
+      throw corruptRecordError("results", outcomeSha256, `outcome_${error.reason}`);
+    }
+    throw error;
+  }
+}
+
+function assertOutcomeForReceiptRead(
+  result: JsonRecord,
+  receipt: SimulationReceipt,
+  receiptSha256: string,
+  netlistBytes: number,
+): void {
+  try {
+    assertOutcomeForBinding(
+      result,
+      receipt.analysis_kind,
+      receipt.execution_state,
+      receipt.netlist_sha256,
+    );
+    assertOutcomeArtifactBytes(result, netlistBytes);
+  } catch (error) {
+    if (error instanceof OutcomeValidationError) {
+      throw corruptRecordError("receipts", receiptSha256, `outcome_${error.reason}`);
+    }
+    throw error;
+  }
+}
+
+function assertOutcomeForPublicationRead(
+  result: JsonRecord,
+  dispatch: SimulationDispatch,
+  publication: SimulationPublication,
+  requestSha256: string,
+  netlistBytes: number,
+): void {
+  try {
+    assertOutcomeForBinding(
+      result,
+      dispatch.analysis_kind,
+      publication.execution_state,
+      dispatch.netlist_sha256,
+    );
+    assertOutcomeArtifactBytes(result, netlistBytes);
+  } catch (error) {
+    if (error instanceof OutcomeValidationError) {
+      throw corruptRecordError(
+        "publications",
+        requestSha256,
+        `outcome_${error.reason}`,
+      );
+    }
+    throw error;
+  }
+}
+
+function assertOutcomeForBinding(
+  result: JsonRecord,
+  analysisKind: AnalysisKind,
+  executionState: SimulationExecutionState,
+  netlistSha256: string,
+): AnalysisKind | "failed" {
+  const outcome = assertPersistedOutcome(result);
+  if (executionState === "failed") {
+    if (outcome !== "failed") outcomeInvalid("failed_result_not_error_envelope");
+    return outcome;
+  }
+  if (outcome === "failed") outcomeInvalid("succeeded_result_not_persisted_success");
+  if (outcome !== analysisKind) outcomeInvalid("analysis_kind_mismatch");
+
+  const artifact = outcomeRecord(result["input_artifact"], "input_artifact");
+  if (artifact["sha256"] !== netlistSha256) {
+    outcomeInvalid("input_artifact_netlist_sha256_mismatch");
+  }
+  return outcome;
+}
+
+function assertOutcomeArtifactBytes(result: JsonRecord, netlistBytes: number): void {
+  if (assertPersistedOutcome(result) === "failed") return;
+  const artifact = outcomeRecord(result["input_artifact"], "input_artifact");
+  if (artifact["bytes"] !== netlistBytes) {
+    outcomeInvalid("input_artifact_netlist_bytes_mismatch");
+  }
+}
+
+function assertPersistedOutcome(result: JsonRecord): AnalysisKind | "failed" {
+  if (
+    Object.hasOwn(result, "code") || Object.hasOwn(result, "context") ||
+    Object.hasOwn(result, "recovery")
+  ) {
+    assertFailureOutcome(result);
+    return "failed";
+  }
+
+  const isOp = Object.hasOwn(result, "node_voltages");
+  const isTran = Object.hasOwn(result, "simulation");
+  const isDc = Object.hasOwn(result, "sweep");
+  if (Number(isOp) + Number(isTran) + Number(isDc) !== 1) {
+    outcomeInvalid("success_discriminator_invalid");
+  }
+  if (isOp) {
+    assertOpOutcome(result);
+    return "op";
+  }
+  if (isTran) {
+    assertTranOutcome(result);
+    return "tran";
+  }
+  assertDcOutcome(result);
+  return "dc";
+}
+
+function assertFailureOutcome(result: JsonRecord): void {
+  assertOutcomeKeys(result, ["code", "context", "recovery"], "failure_keys_invalid");
+  if (typeof result["code"] !== "string" || !result["code"]) {
+    outcomeInvalid("failure_code_invalid");
+  }
+  if (!isJsonRecord(result["context"])) outcomeInvalid("failure_context_invalid");
+  if (typeof result["recovery"] !== "string" || !result["recovery"]) {
+    outcomeInvalid("failure_recovery_invalid");
+  }
+}
+
+function assertOpOutcome(result: JsonRecord): void {
+  assertOutcomeKeys(
+    result,
+    [
+      "node_voltages",
+      "branch_currents_a",
+      "measurements",
+      "not_checked",
+      "input_artifact",
+    ],
+    "op_keys_invalid",
+  );
+  assertNumberMap(result["node_voltages"], "node_voltages");
+  assertNumberMap(result["branch_currents_a"], "branch_currents_a");
+  assertMeasurements(result["measurements"]);
+  assertNotChecked(result["not_checked"]);
+  assertInputArtifact(result["input_artifact"]);
+}
+
+function assertTranOutcome(result: JsonRecord): void {
+  assertOutcomeKeys(
+    result,
+    [
+      "node_stats",
+      "branch_current_stats_a",
+      "measurements",
+      "simulation",
+      "not_checked",
+      "input_artifact",
+    ],
+    "tran_keys_invalid",
+  );
+  assertStatsMap(
+    result["node_stats"],
+    ["min_v", "max_v", "final_v", "min_at_s", "max_at_s", "final_at_s"],
+    "node_stats",
+  );
+  assertStatsMap(
+    result["branch_current_stats_a"],
+    ["min_a", "max_a", "final_a", "min_at_s", "max_at_s", "final_at_s"],
+    "branch_current_stats_a",
+  );
+  assertMeasurements(result["measurements"]);
+  const simulation = outcomeRecord(result["simulation"], "simulation");
+  assertOutcomeKeys(simulation, ["n_points", "tstop_s"], "simulation_keys_invalid");
+  assertOutcomeNumber(simulation["n_points"], "simulation.n_points");
+  assertOutcomeNumber(simulation["tstop_s"], "simulation.tstop_s");
+  assertNotChecked(result["not_checked"]);
+  assertInputArtifact(result["input_artifact"]);
+}
+
+function assertDcOutcome(result: JsonRecord): void {
+  assertOutcomeKeys(
+    result,
+    [
+      "node_stats",
+      "branch_current_stats_a",
+      "measurements",
+      "sweep",
+      "not_checked",
+      "input_artifact",
+    ],
+    "dc_keys_invalid",
+  );
+  assertStatsMap(
+    result["node_stats"],
+    [
+      "min_v",
+      "max_v",
+      "final_v",
+      "min_at_source_v",
+      "max_at_source_v",
+      "final_at_source_v",
+    ],
+    "node_stats",
+  );
+  assertStatsMap(
+    result["branch_current_stats_a"],
+    [
+      "min_a",
+      "max_a",
+      "final_a",
+      "min_at_source_v",
+      "max_at_source_v",
+      "final_at_source_v",
+    ],
+    "branch_current_stats_a",
+  );
+  assertMeasurements(result["measurements"]);
+  const sweep = outcomeRecord(result["sweep"], "sweep");
+  assertOutcomeKeys(
+    sweep,
+    ["source", "start_v", "stop_v", "step_v", "n_points", "max_points"],
+    "sweep_keys_invalid",
+  );
+  if (typeof sweep["source"] !== "string") outcomeInvalid("sweep.source_invalid");
+  for (const field of ["start_v", "stop_v", "step_v", "n_points", "max_points"]) {
+    assertOutcomeNumber(sweep[field], `sweep.${field}`);
+  }
+  assertNotChecked(result["not_checked"]);
+  assertInputArtifact(result["input_artifact"]);
+}
+
+function assertNumberMap(value: unknown, field: string): void {
+  const record = outcomeRecord(value, field);
+  for (const [key, item] of Object.entries(record)) {
+    assertOutcomeNumber(item, `${field}.${key}`);
+  }
+}
+
+function assertStatsMap(value: unknown, fields: string[], field: string): void {
+  const record = outcomeRecord(value, field);
+  for (const [key, item] of Object.entries(record)) {
+    const stats = outcomeRecord(item, `${field}.${key}`);
+    assertOutcomeKeys(stats, fields, `${field}_stat_keys_invalid`);
+    for (const statField of fields) {
+      assertOutcomeNumber(stats[statField], `${field}.${key}.${statField}`);
+    }
+  }
+}
+
+function assertMeasurements(value: unknown): void {
+  const record = outcomeRecord(value, "measurements");
+  for (const [key, item] of Object.entries(record)) {
+    const measurement = outcomeRecord(item, `measurements.${key}`);
+    assertOutcomeKeys(measurement, ["value"], "measurement_keys_invalid");
+    assertOutcomeNumber(measurement["value"], `measurements.${key}.value`);
+  }
+}
+
+function assertNotChecked(value: unknown): void {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    outcomeInvalid("not_checked_invalid");
+  }
+}
+
+function assertInputArtifact(value: unknown): void {
+  const artifact = outcomeRecord(value, "input_artifact");
+  assertOutcomeKeys(artifact, ["sha256", "bytes"], "input_artifact_keys_invalid");
+  if (typeof artifact["sha256"] !== "string" || !SHA256_RE.test(artifact["sha256"])) {
+    outcomeInvalid("input_artifact.sha256_invalid");
+  }
+  if (
+    typeof artifact["bytes"] !== "number" ||
+    !Number.isSafeInteger(artifact["bytes"]) || artifact["bytes"] < 0
+  ) {
+    outcomeInvalid("input_artifact.bytes_invalid");
+  }
+}
+
+function outcomeRecord(value: unknown, field: string): JsonRecord {
+  if (!isJsonRecord(value)) outcomeInvalid(`${field}_invalid`);
+  return value;
+}
+
+function assertOutcomeKeys(
+  value: JsonRecord,
+  expected: string[],
+  reason: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const allowed = [...expected].sort();
+  if (
+    actual.length !== allowed.length ||
+    actual.some((key, index) => key !== allowed[index])
+  ) {
+    outcomeInvalid(reason);
+  }
+}
+
+function assertOutcomeNumber(value: unknown, field: string): void {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    outcomeInvalid(`${field}_invalid`);
+  }
+}
+
+function outcomeInvalid(reason: string): never {
+  throw new OutcomeValidationError(reason);
+}
+
+class OutcomeValidationError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
   }
 }
 
@@ -1238,6 +1635,25 @@ function corruptRecordError(
   );
 }
 
+function immutableRecordConflict(namespace: string, identity: string): SpiceToolError {
+  return new SpiceToolError(
+    "simulation_immutable_record_conflict",
+    { namespace, identity },
+    "Do not overwrite a durable simulation record. Inspect the existing record for corruption or a conflicting writer.",
+  );
+}
+
+function netlistCorruptError(
+  netlistSha256: string,
+  reason: string,
+): SpiceToolError {
+  return new SpiceToolError(
+    "simulation_netlist_corrupt",
+    { netlist_sha256: netlistSha256, reason },
+    "Do not use this receipt. Restore the durable netlist bytes from an authoritative copy.",
+  );
+}
+
 function missingCode(namespace: string): string {
   switch (namespace) {
     case "dispatches":
@@ -1258,6 +1674,23 @@ function concatBytes(first: Uint8Array, second: Uint8Array): Uint8Array {
   combined.set(first, 0);
   combined.set(second, first.length);
   return combined;
+}
+
+function throwRuntimeIdentityOutputFailure(reason: unknown): never {
+  if (
+    reason instanceof SpiceError &&
+    reason.code === "ngspice_output_limit_exceeded"
+  ) {
+    throw new SpiceToolError(
+      "ngspice_runtime_identity_invalid",
+      {
+        reason: "version_output_too_large",
+        maxBytes: MAX_RUNTIME_IDENTITY_BYTES,
+      },
+      "Restore an ngspice runtime that reports a bounded version identity before dispatching a simulation.",
+    );
+  }
+  throw reason;
 }
 
 function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
