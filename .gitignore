@@ -1,5 +1,8 @@
 # Deno cache
 .deno/
 
+# Audited MCP View source checkout used by CI
+.deps/
+
 # OS
 .DS_Store
