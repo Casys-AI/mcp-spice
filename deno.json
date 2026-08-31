@@ -1,6 +1,6 @@
 {
   "name": "@casys/mcp-spice",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "minimumDependencyAge": {
     "age": "P1D",
     "exclude": ["jsr:@casys/mcp-server"]
@@ -18,7 +18,8 @@
   },
   "exports": {
     ".": "./mod.ts",
-    "./server": "./server.ts"
+    "./server": "./server.ts",
+    "./view-app-manifest": "./src/ui/view-app-manifest.json"
   },
   "publish": {
     "include": [
@@ -29,6 +30,7 @@
       "src/**/*.css",
       "src/**/*.html",
       "src/ui/dist/**/*.html",
+      "src/ui/view-app-manifest.json",
       "README.md",
       "CHANGELOG.md",
       "SECURITY.md",

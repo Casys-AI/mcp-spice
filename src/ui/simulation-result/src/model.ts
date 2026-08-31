@@ -5,7 +5,8 @@
  * invent waveform samples, or promote `succeeded` into a requirement verdict.
  */
 
-import { COMPACT_READING_LIMIT } from "../../constants.ts";
+import type { SpiceViewKey } from "../../view-app-manifest.ts";
+import type { RecordedAdmittedOperatingPointView } from "./recorded-admitted.ts";
 import {
   errorMessage,
   exactRecord,
@@ -126,20 +127,19 @@ export type SimulationViewData =
   | OperatingPointView
   | DcSweepView
   | TransientView
-  | FailedOutcomeView;
+  | FailedOutcomeView
+  | RecordedAdmittedOperatingPointView;
+
+export type SimulationResultViewKey = Exclude<
+  SpiceViewKey,
+  "simulationReceipt"
+>;
 
 export type DisplayState =
   | { readonly kind: "loading" }
   | { readonly kind: "empty" }
   | { readonly kind: "error"; readonly message: string }
   | { readonly kind: "result"; readonly result: SimulationViewData };
-
-export interface CompactReading {
-  readonly id: string;
-  readonly label: string;
-  readonly value: number;
-  readonly unit: "V" | "A";
-}
 
 /** Parse one live simulation result or one durable result_get envelope. */
 export function parseSimulationViewData(value: unknown): SimulationViewData {
@@ -148,6 +148,45 @@ export function parseSimulationViewData(value: unknown): SimulationViewData {
     return parseDurableEnvelope(root);
   }
   return parseSimulationBody(root, "live", {});
+}
+
+/** Parse and bind structured content to the exact resource that owns it. */
+export function parseSimulationViewDataForView(
+  view: SimulationResultViewKey,
+  value: unknown,
+): SimulationViewData {
+  const parsed = parseSimulationViewData(value);
+  switch (view) {
+    case "operatingPoint":
+      if (parsed.kind === "operating-point" && parsed.source === "live") {
+        return parsed;
+      }
+      break;
+    case "dcSweep":
+      if (parsed.kind === "dc-sweep" && parsed.source === "live") return parsed;
+      break;
+    case "transientResult":
+      if (parsed.kind === "transient-result" && parsed.source === "live") {
+        return parsed;
+      }
+      break;
+    case "simulationOutcome":
+      if (parsed.source === "durable") return parsed;
+      break;
+  }
+  throw new TypeError(`Structured content does not match the ${view} resource.`);
+}
+
+export function isSimulationViewDataForView(
+  view: SimulationResultViewKey,
+  value: unknown,
+): boolean {
+  try {
+    parseSimulationViewDataForView(view, value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function displayStateFromToolResult(value: unknown): DisplayState {
@@ -161,6 +200,28 @@ export function displayStateFromToolResult(value: unknown): DisplayState {
   if (structured === undefined) return { kind: "empty" };
   try {
     return { kind: "result", result: parseSimulationViewData(structured) };
+  } catch (error) {
+    return { kind: "error", message: errorMessage(error) };
+  }
+}
+
+export function displayStateFromToolResultForView(
+  view: SimulationResultViewKey,
+  value: unknown,
+): DisplayState {
+  const result = record(value, "tool result");
+  if (result.isError === true) {
+    return { kind: "error", message: toolErrorMessage(result) };
+  }
+  const structured = result.structuredContent !== undefined
+    ? (isRecord(result.structuredContent) ? result.structuredContent : undefined)
+    : jsonTextFallback(result.content);
+  if (structured === undefined) return { kind: "empty" };
+  try {
+    return {
+      kind: "result",
+      result: parseSimulationViewDataForView(view, structured),
+    };
   } catch (error) {
     return { kind: "error", message: errorMessage(error) };
   }
@@ -593,34 +654,4 @@ export function sortedEntries<T>(
   return (Object.entries(value) as [string, T][]).sort(([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0
   );
-}
-
-export function compactVoltageReadings(
-  voltages: Readonly<Record<string, number>>,
-): { readonly entries: readonly CompactReading[]; readonly omitted: number } {
-  const all = sortedEntries(voltages).map(([id, value]) => ({
-    id,
-    label: id,
-    value,
-    unit: "V" as const,
-  }));
-  return {
-    entries: all.slice(0, COMPACT_READING_LIMIT),
-    omitted: Math.max(0, all.length - COMPACT_READING_LIMIT),
-  };
-}
-
-export function compactCurrentReadings(
-  currents: Readonly<Record<string, number>>,
-): { readonly entries: readonly CompactReading[]; readonly omitted: number } {
-  const all = sortedEntries(currents).map(([id, value]) => ({
-    id,
-    label: id,
-    value,
-    unit: "A" as const,
-  }));
-  return {
-    entries: all.slice(0, COMPACT_READING_LIMIT),
-    omitted: Math.max(0, all.length - COMPACT_READING_LIMIT),
-  };
 }

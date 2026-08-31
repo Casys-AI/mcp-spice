@@ -10,16 +10,20 @@ All notable changes to this project will be documented in this file. Format:
 
 - Native MCP Apps resources for bounded simulation results: operating point, reduced DC
   sweep, reduced transient, durable outcome readback, and documentary receipt readback.
-  Each whole-view defaults to one compact semantic result. Host-selectable catalog
-  entries cover node/current statistics, sweep or transient facts, documentary receipt
-  provenance, and `not_checked` limits. Visual primitives come from
+  Each whole-view renders one complete semantic business object; node/current readings,
+  sweep or transient facts, documentary provenance, and `not_checked` limits remain in
+  that object rather than a legacy component catalogue. Visual primitives come from
   `@casys/mcp-view-components`; this server keeps schema adapters only.
   `ngspice_netlist_submit` and dispatch recovery stay text-only.
+- The serialized provider-owned View App manifest exposes five exact
+  `viewer.session.apply` contracts. The operating-point receiver also reads exact
+  `spice-operating-point-result/1.0` and `spice-admitted-execution-capture/1.0` recorded
+  artifacts without asking Digital Thread to synthesize an mcp-spice result.
 
 ### Changed
 
 - Single-file HTML builds are reproducible from the exact split MCP View packages at
-  `8fad891839203122efbe2438ba81a6e7d08c9202`, a dedicated npm/JSR lock with `--frozen`,
+  `0629f67179868c9f17a3fb6705da32fdfcbcc216`, a dedicated npm/JSR lock with `--frozen`,
   and a rebuild freshness gate.
 
 ## [0.6.0] - 2026-08-30

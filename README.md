@@ -160,6 +160,15 @@ text confirmation. Full DC and transient curves are still not returned, so the v
 do not invent plots or samples. `succeeded` remains `succeeded`; it is never shown as
 pass, proof, or compliance.
 
+Each resource URI owns one mono-object viewer. The serialized provider manifest is
+exported as `@casys/mcp-spice/view-app-manifest`; it declares the exact result schema
+and read-only recorded-session schema accepted by each URI. Recorded sessions arrive
+only through `viewer.session.apply`. The operating-point viewer can also project the
+exact persisted `spice-operating-point-result/1.0` or
+`spice-admitted-execution-capture/1.0` artifact, with its recorded basis and hashes; the
+host must pass those artifact bytes unchanged rather than manufacture an MCP tool
+result.
+
 Each registered operation is non-destructive, idempotent, and closed-world. Simulation
 calls default to a 30-second timeout; `timeout_s` outside 1–300 seconds is refused. Both
 source modes accept at most 1 MiB of netlist bytes. Each `nodes[]` and
@@ -583,13 +592,13 @@ deno task fmt            # format check
 deno task test           # test without requiring ngspice
 SPICE_RUN_NATIVE=1 deno task test  # include native ngspice integration
 deno task build:ui       # rebuild MCP Apps HTML from audited mcp-view sources
-deno task test:ui        # component catalog tests against those sources
+deno task test:ui        # mono-object component and recorded-session contract tests
 deno task check:ui:bundle  # rebuild and require a byte-identical committed HTML
-deno task release:check  # fmt + check + lint + test + UI catalog + freshness
+deno task release:check  # fmt + check + lint + tests + UI freshness
 ```
 
 Viewer builds require the exact split MCP View v2 packages from `Casys-AI/mcp-server` at
-`8fad891839203122efbe2438ba81a6e7d08c9202`. Point `MCP_VIEW_LOCAL_ROOT`,
+`0629f67179868c9f17a3fb6705da32fdfcbcc216`. Point `MCP_VIEW_LOCAL_ROOT`,
 `MCP_VIEW_CONTRACTS_LOCAL_ROOT`, and `MCP_VIEW_COMPONENTS_LOCAL_ROOT` at that checkout's
 `packages/view`, `packages/view-contracts`, and `packages/view-components`. There is no
 published compatibility fallback. The dedicated `src/ui/deno.lock` is used with

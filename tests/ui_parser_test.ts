@@ -7,8 +7,6 @@ import {
   displayStateFromToolResult,
   parseSimulationViewData,
 } from "../src/ui/simulation-result/src/model.ts";
-import { COMPACT_READING_LIMIT } from "../src/ui/constants.ts";
-import { compactReadings } from "../src/ui/simulation-result/src/catalog.ts";
 
 const NETLIST = "a".repeat(64);
 const REQUEST = "b".repeat(64);
@@ -249,25 +247,4 @@ Deno.test("tool-result display keeps text fallback and refuses submit confirmati
     kind: "error",
     message: "ngspice_timeout",
   });
-});
-
-Deno.test("compact readings stay bounded and never invent a primary node", () => {
-  const parsed = parseSimulationViewData({
-    ...liveOp,
-    node_voltages: { z: 1, a: 2, m: 3, b: 4 },
-    measurements: {
-      z: { value: 1 },
-      a: { value: 2 },
-      m: { value: 3 },
-      b: { value: 4 },
-    },
-    branch_currents_a: {},
-  });
-  assertEquals(parsed.kind, "operating-point");
-  if (parsed.kind !== "operating-point") return;
-  const compact = compactReadings(parsed);
-  assertEquals(compact.entries.length, COMPACT_READING_LIMIT);
-  assertEquals(compact.entries.map((item) => item.id), ["a", "b", "m"]);
-  assertEquals(compact.omitted, 1);
-  assertEquals(compact.entries[0]?.unit, "V");
 });

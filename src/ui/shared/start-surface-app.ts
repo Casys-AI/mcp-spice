@@ -21,19 +21,32 @@ export type SurfaceDisplayState<TData> =
   | { readonly kind: "error"; readonly message: string }
   | { readonly kind: "result"; readonly result: TData };
 
-export interface SpiceSurfaceAppOptions<TData> {
+export interface SpiceSurfaceAppOptions<TData, TSession = never> {
   readonly root: HTMLElement;
   readonly info: { readonly name: string; readonly version: string };
   readonly registry: ViewComponentRegistry<TData>;
   readonly loadingLabel: string;
   readonly emptyLabel: string;
   readonly fromToolResult: (value: unknown) => SurfaceDisplayState<TData>;
+  /** App-owned validator for the whole-resource recorded-session action. */
+  readonly validateSession?: (value: unknown) => value is TSession;
+  /** Map one validated session to the same mono-object model as a tool result. */
+  readonly mapSessionToData?: (session: TSession) => TData | Promise<TData>;
   readonly surfaceClassName?: string;
 }
 
-export async function startSpiceSurfaceApp<TData>(
-  options: SpiceSurfaceAppOptions<TData>,
+export async function startSpiceSurfaceApp<TData, TSession = never>(
+  options: SpiceSurfaceAppOptions<TData, TSession>,
 ): Promise<void> {
+  const sessionEnabled = options.validateSession !== undefined ||
+    options.mapSessionToData !== undefined;
+  if (sessionEnabled && (!options.validateSession || !options.mapSessionToData)) {
+    throw new TypeError(
+      "startSpiceSurfaceApp requires both validateSession and mapSessionToData",
+    );
+  }
+  const validateSession = options.validateSession;
+  const mapSessionToData = options.mapSessionToData;
   installMcpViewTheme();
   const state: Record<string, never> = {};
   let mounted: MountedComponentSurface | undefined;
@@ -116,7 +129,7 @@ export async function startSpiceSurfaceApp<TData>(
     onLeave: disposeSurface,
   });
 
-  const handle = await createMcpApp<Record<string, never>>({
+  const handle = await createMcpApp<Record<string, never>, TSession>({
     info: options.info,
     root: options.root,
     strict: true,
@@ -124,6 +137,18 @@ export async function startSpiceSurfaceApp<TData>(
     initialView: "status",
     initialArgs: { kind: "loading" } satisfies SurfaceDisplayState<TData>,
     initialState: state,
+    ...(validateSession && mapSessionToData
+      ? {
+        viewerSession: {
+          validate: validateSession,
+          onSession: async (session, _payload, app) => {
+            const data = await mapSessionToData(session);
+            await app.navigate("surface", data);
+          },
+          onError: reportError,
+        },
+      }
+      : {}),
     capabilities: {
       experimental: componentCatalogCapabilities(options.registry),
     },
@@ -195,9 +220,9 @@ async function showDisplayState<TData>(
   await navigate("status", state);
 }
 
-function renderStatus<TData>(
+function renderStatus<TData, TSession>(
   state: SurfaceDisplayState<TData>,
-  options: SpiceSurfaceAppOptions<TData>,
+  options: SpiceSurfaceAppOptions<TData, TSession>,
 ): HTMLElement {
   switch (state.kind) {
     case "loading":

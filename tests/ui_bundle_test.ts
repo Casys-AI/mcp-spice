@@ -1,13 +1,16 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { fromFileUrl } from "@std/path";
-import { SPICE_COMPONENT_KEYS } from "../src/ui/simulation-result/src/catalog.ts";
 import {
-  SPICE_RECEIPT_COMPONENT_KEYS,
-} from "../src/ui/simulation-receipt/src/catalog.ts";
-import {
+  SPICE_RECEIPT_COMPONENT,
+  SPICE_RESULT_COMPONENT,
   SPICE_RESULT_VIEWERS,
   SPICE_SIMULATION_RECEIPT_VIEWER,
+  SPICE_VIEWERS,
 } from "../src/ui/constants.ts";
+import {
+  SPICE_VIEW_CONTRACTS,
+  type SpiceViewKey,
+} from "../src/ui/view-app-manifest.ts";
 
 Deno.test("viewer build fails closed without every audited split root", async () => {
   const repository = fromFileUrl(new URL("../", import.meta.url));
@@ -28,52 +31,56 @@ Deno.test("viewer build fails closed without every audited split root", async ()
   assertStringIncludes(error, "no published compatibility fallback");
 });
 
-Deno.test("committed result viewers share one discriminated HTML bundle", async () => {
+Deno.test("five committed resources are distinct App-level session receivers", async () => {
   const bodies = await Promise.all(
-    SPICE_RESULT_VIEWERS.map((viewer) =>
+    SPICE_VIEWERS.map((viewer) =>
       Deno.readTextFile(
         new URL(`../src/ui/dist/${viewer}/index.html`, import.meta.url),
       )
     ),
   );
-  for (const html of bodies.slice(1)) {
-    assertEquals(html, bodies[0]);
+  assertEquals(new Set(bodies).size, SPICE_VIEWERS.length);
+  for (const [index, html] of bodies.entries()) {
+    assertInlineModule(html);
+    assert(html.includes("viewer.session.apply"), SPICE_VIEWERS[index]);
+    assert(html.includes("mcp-view-semantic-element"), SPICE_VIEWERS[index]);
+    assertEquals(html.includes("ElementVerdict"), false);
+    assertEquals(html.includes("PathBar"), false);
+    assertEquals(html.includes("spice.node-statistics"), false);
+    assertEquals(html.includes("spice.receipt-identities"), false);
   }
-  const html = bodies[0] ?? "";
-  assertInlineModule(html);
-  assert(html.includes("spice.simulation-result"));
-  for (const key of Object.values(SPICE_COMPONENT_KEYS)) {
-    assert(html.includes(key), key);
-  }
-  assert(html.includes("mcp-view-semantic-element"));
-  assert(html.includes("io.casys.mcp.view-components/v1"));
-  assertEquals(html.includes("Recorded proof"), false);
-  assertEquals(html.includes("requirement verdict"), false);
-  assertEquals(html.includes("MCP RESULT"), false);
-  assertEquals(html.includes('class="masthead"'), false);
 });
 
-Deno.test("committed receipt viewer is a distinct documentary resource", async () => {
-  const html = await Deno.readTextFile(
+Deno.test("each bundle contains its exact recorded-session schema", async () => {
+  const mapping: readonly [string, SpiceViewKey][] = [
+    ["operating-point", "operatingPoint"],
+    ["dc-sweep", "dcSweep"],
+    ["transient-result", "transientResult"],
+    ["simulation-outcome", "simulationOutcome"],
+    ["simulation-receipt", "simulationReceipt"],
+  ];
+  for (const [viewer, key] of mapping) {
+    const html = await Deno.readTextFile(
+      new URL(`../src/ui/dist/${viewer}/index.html`, import.meta.url),
+    );
+    assert(html.includes(SPICE_VIEW_CONTRACTS[key].sessionSchema), viewer);
+  }
+});
+
+Deno.test("result and receipt bundles expose one business component each", async () => {
+  for (const viewer of SPICE_RESULT_VIEWERS) {
+    const html = await Deno.readTextFile(
+      new URL(`../src/ui/dist/${viewer}/index.html`, import.meta.url),
+    );
+    assert(html.includes(SPICE_RESULT_COMPONENT));
+  }
+  const receipt = await Deno.readTextFile(
     new URL(
       `../src/ui/dist/${SPICE_SIMULATION_RECEIPT_VIEWER}/index.html`,
       import.meta.url,
     ),
   );
-  const resultHtml = await Deno.readTextFile(
-    new URL(
-      `../src/ui/dist/${SPICE_RESULT_VIEWERS[0]}/index.html`,
-      import.meta.url,
-    ),
-  );
-  assertInlineModule(html);
-  assertEquals(html === resultHtml, false);
-  for (const key of Object.values(SPICE_RECEIPT_COMPONENT_KEYS)) {
-    assert(html.includes(key), key);
-  }
-  assert(html.includes("documentary_only"));
-  assertEquals(html.includes("Recorded proof"), false);
-  assertEquals(html.includes("requirement verdict"), false);
+  assert(receipt.includes(SPICE_RECEIPT_COMPONENT));
 });
 
 function assertInlineModule(html: string): void {

@@ -4,7 +4,27 @@ import { withAuditedViewerDenoConfig } from "./local-modules.ts";
 
 const here = dirname(fromFileUrl(import.meta.url));
 export const VIEWER_LOCK = join(here, "deno.lock");
-export const RESULT_ENTRY = join(here, "simulation-result", "src", "main.ts");
+export const RESULT_ENTRIES = {
+  "operating-point": join(
+    here,
+    "simulation-result",
+    "src",
+    "operating-point-main.ts",
+  ),
+  "dc-sweep": join(here, "simulation-result", "src", "dc-sweep-main.ts"),
+  "transient-result": join(
+    here,
+    "simulation-result",
+    "src",
+    "transient-result-main.ts",
+  ),
+  "simulation-outcome": join(
+    here,
+    "simulation-result",
+    "src",
+    "simulation-outcome-main.ts",
+  ),
+} as const;
 export const RECEIPT_ENTRY = join(
   here,
   "simulation-receipt",
@@ -20,13 +40,19 @@ export async function buildSpiceViewers(
   outputRoot = join(here, "dist"),
 ): Promise<void> {
   await withAuditedViewerDenoConfig(async (configPath) => {
-    const resultHtml = await bundleViewer({
-      configPath,
-      entry: RESULT_ENTRY,
-      template: join(here, "simulation-result", "index.html"),
-      css: join(here, "simulation-result", "src", "styles.css"),
-      prefix: "mcp-spice-result-viewer-",
-    });
+    const resultHtml = new Map<string, string>();
+    for (const viewer of SPICE_RESULT_VIEWERS) {
+      resultHtml.set(
+        viewer,
+        await bundleViewer({
+          configPath,
+          entry: RESULT_ENTRIES[viewer],
+          template: join(here, "simulation-result", "index.html"),
+          css: join(here, "simulation-result", "src", "styles.css"),
+          prefix: `mcp-spice-${viewer}-viewer-`,
+        }),
+      );
+    }
     const receiptHtml = await bundleViewer({
       configPath,
       entry: RECEIPT_ENTRY,
@@ -37,7 +63,7 @@ export async function buildSpiceViewers(
     for (const viewer of SPICE_RESULT_VIEWERS) {
       const output = join(outputRoot, viewer, "index.html");
       await Deno.mkdir(dirname(output), { recursive: true });
-      await Deno.writeTextFile(output, resultHtml);
+      await Deno.writeTextFile(output, resultHtml.get(viewer)!);
       console.log(`[mcp-spice] wrote ${output}`);
     }
     const receiptOutput = join(

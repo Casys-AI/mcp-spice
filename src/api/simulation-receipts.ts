@@ -32,7 +32,7 @@ import {
 } from "./ngspice.ts";
 import { isMachineReadableError, SpiceToolError } from "./tool-error.ts";
 
-export const MCP_SPICE_VERSION = "0.6.0";
+export const MCP_SPICE_VERSION = "0.6.1";
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const MAX_RUNTIME_IDENTITY_BYTES = 8 * 1024;

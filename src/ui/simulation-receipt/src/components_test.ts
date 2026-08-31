@@ -4,8 +4,11 @@ import {
   mountComponentSurface,
 } from "@casys/mcp-view-components";
 import type { PreactSurfaceContext } from "@casys/mcp-view-components/preact";
-import { SPICE_RECEIPT_COMPONENT_KEYS, SPICE_RECEIPT_SURFACE } from "./catalog.ts";
-import { SPICE_RECEIPT_REGISTRY } from "./components.tsx";
+import {
+  SPICE_RECEIPT_COMPONENT,
+  SPICE_RECEIPT_REGISTRY,
+  SPICE_RECEIPT_SURFACE,
+} from "./components.tsx";
 import { parseReceiptViewData, type ReceiptViewData } from "./model.ts";
 
 const receipt = parseReceiptViewData({
@@ -16,13 +19,9 @@ const receipt = parseReceiptViewData({
     dispatch_sha256: "3".repeat(64),
     analysis_kind: "op",
     netlist_sha256: "4".repeat(64),
-    normalized_request: {
-      nodes: ["out"],
-      branch_sources: [],
-      timeout_s: 30,
-    },
+    normalized_request: { nodes: ["out"], branch_sources: [], timeout_s: 30 },
     runtime_identity: {
-      mcp_spice_version: "0.6.0",
+      mcp_spice_version: "0.6.1",
       execution_budgets: "execution-budgets/1.0",
       deno_version: "2.9.6",
       os: "linux",
@@ -35,22 +34,15 @@ const receipt = parseReceiptViewData({
   },
 });
 
-const componentContext = {} as unknown as PreactSurfaceContext<ReceiptViewData>;
-
-Deno.test("receipt catalog defaults to one compact documentary receipt", () => {
+Deno.test("receipt registry exposes one mono-object component", () => {
   const advertised = advertisedComponentCatalog(SPICE_RECEIPT_REGISTRY);
   assertEquals(advertised.defaultSurface, SPICE_RECEIPT_SURFACE);
-  assertEquals(
-    Object.keys(advertised.components).toSorted(),
-    Object.values(SPICE_RECEIPT_COMPONENT_KEYS).toSorted(),
-  );
+  assertEquals(Object.keys(advertised.components), [SPICE_RECEIPT_COMPONENT]);
 });
 
-Deno.test("compact receipt keeps succeeded and documentary_only without proof language", async () => {
-  const documentModule = await import("linkedom");
-  const dom = documentModule.parseHTML(
-    "<html><body><div id=root></div></body></html>",
-  );
+Deno.test("receipt component includes request, runtime, state, and exact identities", async () => {
+  const { parseHTML } = await import("linkedom");
+  const dom = parseHTML("<html><body><div id=root></div></body></html>");
   const previousDocument = globalThis.document;
   Object.defineProperty(globalThis, "document", {
     configurable: true,
@@ -62,16 +54,27 @@ Deno.test("compact receipt keeps succeeded and documentary_only without proof la
       root,
       registry: SPICE_RECEIPT_REGISTRY,
       data: receipt,
-      appContext: componentContext,
+      appContext: {} as PreactSurfaceContext<ReceiptViewData>,
       hostContext: {} as PreactSurfaceContext<ReceiptViewData>["hostContext"],
     });
     try {
       const text = root.textContent ?? "";
-      assert(text.includes("succeeded"));
-      assert(text.includes("documentary_only"));
+      for (
+        const expected of [
+          "Simulation receipt",
+          "succeeded",
+          "timeout_s",
+          "mcp_spice_version",
+          "request_sha256",
+          "outcome_sha256",
+        ]
+      ) assert(text.includes(expected), expected);
+      assertEquals(text.includes("documentary_only"), false);
       assertEquals(text.toLowerCase().includes("proof"), false);
       assertEquals(text.toLowerCase().includes("compliance"), false);
       assertEquals(text.includes("pass"), false);
+      assertEquals(root.querySelectorAll(".mcp-view-semantic-element").length, 1);
+      assertEquals(root.querySelector(".mcp-view-card"), null);
     } finally {
       await mounted.dispose();
     }

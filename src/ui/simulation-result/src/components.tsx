@@ -10,8 +10,6 @@ import {
   type PreactSurfaceContext,
 } from "@casys/mcp-view-components/preact";
 import {
-  Card,
-  DataTable,
   ElementBody,
   ElementIdent,
   ElementProvenance,
@@ -22,471 +20,455 @@ import {
   Message,
   SemanticElement,
   Stack,
-  StateMessage,
 } from "@casys/mcp-view-components/preact/components";
 import type { ComponentChild } from "preact";
-import {
-  compactReadings,
-  executionStateLabel,
-  executionStateTone,
-  resultDetail,
-  resultIdentity,
-  resultMarker,
-  resultTitle,
-  SPICE_COMPONENT_KEYS,
-  SPICE_RESULTS_SURFACE,
-} from "./catalog.ts";
+import { COMPACT_READING_LIMIT, SPICE_RESULT_COMPONENT } from "../../constants.ts";
+import { formatInteger, formatNumber } from "../../shared/format.ts";
 import {
   type BranchCurrentStats,
   type NodeVoltageStats,
   type SimulationViewData,
   sortedEntries,
 } from "./model.ts";
-import { formatInteger, formatNumber } from "../../shared/format.ts";
+
+export { SPICE_RESULT_COMPONENT };
+export const SPICE_RESULT_SURFACE = {
+  layout: { type: "stack", gap: "sm" },
+  components: [{ id: "result", component: SPICE_RESULT_COMPONENT }],
+} as const;
 
 type ResultProps = PreactSurfaceComponentProps<SimulationViewData>;
 
-const SimulationResult = ({ data }: ResultProps) => {
-  const readings = compactReadings(data);
-  const state = executionStateLabel(data);
-  return (
-    <SemanticElement
-      reference={{
-        domain: "spice",
-        kind: data.kind,
-        id: resultIdentity(data),
-        ...(data.kind === "failed-outcome"
-          ? (data.outcome_sha256 ? { basisFingerprint: data.outcome_sha256 } : {})
-          : { basisFingerprint: data.input_artifact.sha256 }),
-      }}
-      density="card"
-      tone={executionStateTone(state)}
-      ident={
-        <ElementIdent
-          marker={resultMarker(data)}
-          label={resultTitle(data)}
-          detail={resultDetail(data)}
-        />
-      }
-      reading={readings.entries.map((item) => (
-        <ElementReading
-          key={item.id}
-          label={item.label}
-          value={formatNumber(item.value)}
-          unit={item.unit}
-        />
-      ))}
-      body={
-        <ElementBody>
-          {data.kind === "failed-outcome"
-            ? <Message tone="danger">{data.recovery}</Message>
-            : readings.omitted > 0
-            ? (
-              <Message tone="neutral">
-                {`${readings.omitted} additional observables are in the host-selectable statistics components.`}
-              </Message>
-            )
-            : (
-              <Message tone="neutral">
-                {state}
-                {data.kind !== "operating-point" ? " · reduced summaries only" : ""}
-              </Message>
-            )}
-        </ElementBody>
-      }
-      provenance={
-        <ElementProvenance
-          label={data.kind === "failed-outcome" ? "outcome SHA-256" : "netlist SHA-256"}
-          value={
-            <InlineCode>
-              {data.kind === "failed-outcome"
-                ? (data.outcome_sha256 ?? data.code)
-                : data.input_artifact.sha256}
-            </InlineCode>
-          }
-        />
-      }
-    />
-  );
-};
-
-const NodeStatistics = ({ data }: ResultProps) => {
-  if (data.kind === "failed-outcome") {
-    return (
-      <Card title="Node statistics" eyebrow="Reduced observations">
-        <EmptyState>A typed failure has no node statistics.</EmptyState>
-      </Card>
-    );
-  }
-  if (data.kind === "operating-point") {
-    const rows = sortedEntries(data.node_voltages);
-    return (
-      <Card title="Node voltages" eyebrow="Volts">
-        {rows.length === 0
-          ? <EmptyState>No node voltages were requested.</EmptyState>
-          : (
-            <KeyValueList
-              items={rows.map(([name, value]) => ({
-                id: name,
-                label: name,
-                value: `${formatNumber(value)} V`,
-              }))}
-            />
-          )}
-      </Card>
-    );
-  }
-  const rows = sortedEntries(data.node_stats).map(([name, stats]) => ({
-    name,
-    ...stats,
-  }));
-  return (
-    <Card title="Node statistics" eyebrow="Reduced voltage summaries">
-      <DataTable
-        label="Node voltage statistics"
-        rows={rows}
-        rowKey={(row) => row.name}
-        emptyLabel="No node statistics were requested."
-        columns={voltageColumns(data.kind)}
+const SimulationResult = ({ data }: ResultProps) => (
+  <SemanticElement
+    reference={resultReference(data)}
+    density="card"
+    tone={data.kind === "failed-outcome" ? "danger" : "neutral"}
+    ident={
+      <ElementIdent
+        marker={resultMarker(data)}
+        label={resultTitle(data)}
+        detail={resultDetail(data)}
       />
-    </Card>
-  );
-};
-
-const CurrentStatistics = ({ data }: ResultProps) => {
-  if (data.kind === "failed-outcome") {
-    return (
-      <Card title="Branch-current statistics" eyebrow="Reduced observations">
-        <EmptyState>A typed failure has no branch-current statistics.</EmptyState>
-      </Card>
-    );
-  }
-  if (data.kind === "operating-point") {
-    const rows = sortedEntries(data.branch_currents_a);
-    return (
-      <Card title="Branch currents" eyebrow="Amperes">
-        {rows.length === 0
-          ? <EmptyState>No branch currents were requested.</EmptyState>
-          : (
-            <KeyValueList
-              items={rows.map(([name, value]) => ({
-                id: name,
-                label: name,
-                value: `${formatNumber(value)} A`,
-              }))}
-            />
-          )}
-      </Card>
-    );
-  }
-  const rows = sortedEntries(data.branch_current_stats_a).map(
-    ([name, stats]) => ({ name, ...stats }),
-  );
-  return (
-    <Card title="Branch-current statistics" eyebrow="Reduced current summaries">
-      <DataTable
-        label="Branch-current statistics"
-        rows={rows}
-        rowKey={(row) => row.name}
-        emptyLabel="No branch-current statistics were requested."
-        columns={currentColumns(data.kind)}
+    }
+    reading={primaryReadings(data).map((reading) => (
+      <ElementReading
+        key={reading.id}
+        label={reading.label}
+        value={reading.value}
+        unit={reading.unit}
       />
-    </Card>
-  );
-};
-
-const AnalysisFacts = ({ data }: ResultProps) => {
-  if (data.kind === "dc-sweep") {
-    return (
-      <Card title="Sweep facts" eyebrow="Server-owned DC sweep">
-        <KeyValueList
-          items={[
-            { id: "source", label: "source", value: data.sweep.source },
-            {
-              id: "start_v",
-              label: "start_v",
-              value: `${formatNumber(data.sweep.start_v)} V`,
-            },
-            {
-              id: "stop_v",
-              label: "stop_v",
-              value: `${formatNumber(data.sweep.stop_v)} V`,
-            },
-            {
-              id: "step_v",
-              label: "step_v",
-              value: `${formatNumber(data.sweep.step_v)} V`,
-            },
-            {
-              id: "n_points",
-              label: "n_points",
-              value: formatInteger(data.sweep.n_points),
-            },
-            {
-              id: "max_points",
-              label: "max_points",
-              value: formatInteger(data.sweep.max_points),
-            },
-          ]}
-        />
-      </Card>
-    );
-  }
-  if (data.kind === "transient-result") {
-    return (
-      <Card title="Simulation facts" eyebrow="Transient window">
-        <KeyValueList
-          items={[
-            {
-              id: "n_points",
-              label: "n_points",
-              value: formatInteger(data.simulation.n_points),
-            },
-            {
-              id: "tstop_s",
-              label: "tstop_s",
-              value: `${formatNumber(data.simulation.tstop_s)} s`,
-            },
-          ]}
-        />
-      </Card>
-    );
-  }
-  return (
-    <Card title="Analysis facts" eyebrow="Simulation metadata">
-      <StateMessage title="No sweep or time-window facts" tone="neutral">
-        This result is a single operating point or a typed failure. It has no sweep or
-        transient window fields.
-      </StateMessage>
-    </Card>
-  );
-};
-
-const ReceiptProvenance = ({ data }: ResultProps) => {
-  const items = provenanceItems(data);
-  return (
-    <Card title="Documentary receipt provenance" eyebrow="Provider record">
-      {items.length === 0
-        ? (
-          <EmptyState>
-            This payload has no documentary receipt reference.
-          </EmptyState>
-        )
-        : <KeyValueList items={items} />}
-    </Card>
-  );
-};
-
-const NotChecked = ({ data }: ResultProps) => {
-  if (data.kind === "failed-outcome") {
-    return (
-      <Card title="Not checked" eyebrow="Analysis boundary">
-        <EmptyState>A typed failure has no not_checked list.</EmptyState>
-      </Card>
-    );
-  }
-  return (
-    <Card title="Not checked" eyebrow="Declared analysis limits">
-      {data.not_checked.length === 0
-        ? <EmptyState>No not_checked items were supplied.</EmptyState>
-        : (
-          <Stack gap="xs">
-            {data.not_checked.map((item, index) => (
-              <Message key={`limit-${index}`} tone="neutral">{item}</Message>
-            ))}
-          </Stack>
-        )}
-    </Card>
-  );
-};
+    ))}
+    body={<ElementBody>{resultBody(data)}</ElementBody>}
+    provenance={
+      <ElementProvenance
+        label={primaryProvenance(data).label}
+        value={<InlineCode>{primaryProvenance(data).value}</InlineCode>}
+      />
+    }
+  />
+);
 
 export const SPICE_COMPONENT_REGISTRY = defineComponentRegistry<
   SimulationViewData,
   PreactSurfaceContext<SimulationViewData>
 >({
   components: {
-    [SPICE_COMPONENT_KEYS.simulationResult]: definePreactComponent(
+    [SPICE_RESULT_COMPONENT]: definePreactComponent(
       {
-        title: "Simulation result",
+        title: "SPICE simulation result",
         description:
-          "One compact operating-point, reduced DC sweep, reduced transient, or typed failure.",
+          "One exact operating point, reduced sweep/transient, durable outcome, or recorded admitted capture.",
       },
       SimulationResult,
     ),
-    [SPICE_COMPONENT_KEYS.nodeStatistics]: definePreactComponent(
-      {
-        title: "Node statistics",
-        description:
-          "Requested node voltages or reduced voltage statistics from the actual schema.",
-      },
-      NodeStatistics,
-    ),
-    [SPICE_COMPONENT_KEYS.currentStatistics]: definePreactComponent(
-      {
-        title: "Current statistics",
-        description:
-          "Requested branch currents or reduced current statistics from the actual schema.",
-      },
-      CurrentStatistics,
-    ),
-    [SPICE_COMPONENT_KEYS.analysisFacts]: definePreactComponent(
-      {
-        title: "Analysis facts",
-        description: "Sweep or transient window facts when the schema supplies them.",
-      },
-      AnalysisFacts,
-    ),
-    [SPICE_COMPONENT_KEYS.receiptProvenance]: definePreactComponent(
-      {
-        title: "Documentary receipt provenance",
-        description:
-          "Documentary identities from the live receipt reference or durable outcome envelope.",
-      },
-      ReceiptProvenance,
-    ),
-    [SPICE_COMPONENT_KEYS.notChecked]: definePreactComponent(
-      {
-        title: "Not checked",
-        description: "Declared analysis limits copied from not_checked.",
-      },
-      NotChecked,
-    ),
   },
-  defaultSurface: defineComponentSurface(SPICE_RESULTS_SURFACE),
+  defaultSurface: defineComponentSurface(SPICE_RESULT_SURFACE),
 });
 
-type NamedVoltageStats = { name: string } & NodeVoltageStats;
-type NamedCurrentStats = { name: string } & BranchCurrentStats;
-
-function voltageColumns(kind: "dc-sweep" | "transient-result") {
-  return [
-    {
-      id: "name",
-      label: "node",
-      render: (row: NamedVoltageStats) => row.name,
-    },
-    {
-      id: "min_v",
-      label: "min_v",
-      align: "right" as const,
-      render: (row: NamedVoltageStats) => `${formatNumber(row.min_v)} V`,
-    },
-    {
-      id: "max_v",
-      label: "max_v",
-      align: "right" as const,
-      render: (row: NamedVoltageStats) => `${formatNumber(row.max_v)} V`,
-    },
-    {
-      id: "final_v",
-      label: "final_v",
-      align: "right" as const,
-      render: (row: NamedVoltageStats) => `${formatNumber(row.final_v)} V`,
-    },
-    {
-      id: "min_at",
-      label: kind === "dc-sweep" ? "min_at_source_v" : "min_at_s",
-      align: "right" as const,
-      render: (row: NamedVoltageStats) =>
-        kind === "dc-sweep"
-          ? `${formatNumber(row.min_at_source_v ?? 0)} V`
-          : `${formatNumber(row.min_at_s ?? 0)} s`,
-    },
-    {
-      id: "max_at",
-      label: kind === "dc-sweep" ? "max_at_source_v" : "max_at_s",
-      align: "right" as const,
-      render: (row: NamedVoltageStats) =>
-        kind === "dc-sweep"
-          ? `${formatNumber(row.max_at_source_v ?? 0)} V`
-          : `${formatNumber(row.max_at_s ?? 0)} s`,
-    },
-    {
-      id: "final_at",
-      label: kind === "dc-sweep" ? "final_at_source_v" : "final_at_s",
-      align: "right" as const,
-      render: (row: NamedVoltageStats) =>
-        kind === "dc-sweep"
-          ? `${formatNumber(row.final_at_source_v ?? 0)} V`
-          : `${formatNumber(row.final_at_s ?? 0)} s`,
-    },
-  ];
+function resultReference(data: SimulationViewData) {
+  if (data.kind === "recorded-admitted-operating-point") {
+    return {
+      domain: "spice",
+      kind: data.kind,
+      id: data.recorded.artifact.id,
+      basisFingerprint: data.recorded.artifact.fingerprint,
+    };
+  }
+  if (data.kind === "failed-outcome") {
+    return {
+      domain: "spice",
+      kind: data.kind,
+      id: data.outcome_sha256 ?? data.code,
+      ...(data.outcome_sha256 ? { basisFingerprint: data.outcome_sha256 } : {}),
+    };
+  }
+  return {
+    domain: "spice",
+    kind: data.kind,
+    id: data.documentary_receipt?.outcome_sha256 ??
+      data.outcome_sha256 ?? data.input_artifact.sha256,
+    basisFingerprint: data.input_artifact.sha256,
+  };
 }
 
-function currentColumns(kind: "dc-sweep" | "transient-result") {
-  return [
-    {
-      id: "name",
-      label: "source",
-      render: (row: NamedCurrentStats) => row.name,
-    },
-    {
-      id: "min_a",
-      label: "min_a",
-      align: "right" as const,
-      render: (row: NamedCurrentStats) => `${formatNumber(row.min_a)} A`,
-    },
-    {
-      id: "max_a",
-      label: "max_a",
-      align: "right" as const,
-      render: (row: NamedCurrentStats) => `${formatNumber(row.max_a)} A`,
-    },
-    {
-      id: "final_a",
-      label: "final_a",
-      align: "right" as const,
-      render: (row: NamedCurrentStats) => `${formatNumber(row.final_a)} A`,
-    },
-    {
-      id: "min_at",
-      label: kind === "dc-sweep" ? "min_at_source_v" : "min_at_s",
-      align: "right" as const,
-      render: (row: NamedCurrentStats) =>
-        kind === "dc-sweep"
-          ? `${formatNumber(row.min_at_source_v ?? 0)} V`
-          : `${formatNumber(row.min_at_s ?? 0)} s`,
-    },
-    {
-      id: "max_at",
-      label: kind === "dc-sweep" ? "max_at_source_v" : "max_at_s",
-      align: "right" as const,
-      render: (row: NamedCurrentStats) =>
-        kind === "dc-sweep"
-          ? `${formatNumber(row.max_at_source_v ?? 0)} V`
-          : `${formatNumber(row.max_at_s ?? 0)} s`,
-    },
-    {
-      id: "final_at",
-      label: kind === "dc-sweep" ? "final_at_source_v" : "final_at_s",
-      align: "right" as const,
-      render: (row: NamedCurrentStats) =>
-        kind === "dc-sweep"
-          ? `${formatNumber(row.final_at_source_v ?? 0)} V`
-          : `${formatNumber(row.final_at_s ?? 0)} s`,
-    },
-  ];
+function resultMarker(data: SimulationViewData): string {
+  switch (data.kind) {
+    case "operating-point":
+    case "recorded-admitted-operating-point":
+      return "OP";
+    case "dc-sweep":
+      return "DC";
+    case "transient-result":
+      return "TRAN";
+    case "failed-outcome":
+      return "failed";
+  }
 }
 
-function provenanceItems(data: SimulationViewData): {
-  readonly id: string;
-  readonly label: string;
-  readonly value: ComponentChild;
+function resultTitle(data: SimulationViewData): string {
+  switch (data.kind) {
+    case "operating-point":
+      return "Operating point";
+    case "recorded-admitted-operating-point":
+      return "Admitted SPICE operating point";
+    case "dc-sweep":
+      return "Reduced DC sweep";
+    case "transient-result":
+      return "Reduced transient result";
+    case "failed-outcome":
+      return data.code;
+  }
+}
+
+function resultDetail(data: SimulationViewData): string {
+  switch (data.kind) {
+    case "operating-point":
+      return data.source === "durable"
+        ? "Durable operating-point outcome"
+        : "DC operating point";
+    case "recorded-admitted-operating-point":
+      return `Exact recorded ${data.sourceSchema}`;
+    case "dc-sweep":
+      return "Reduced extrema and final values; no transfer curve";
+    case "transient-result":
+      return "Reduced extrema and final values; no time series";
+    case "failed-outcome":
+      return "Typed terminal failure";
+  }
+}
+
+function primaryReadings(data: SimulationViewData): readonly {
+  id: string;
+  label: string;
+  value: string;
+  unit?: string;
 }[] {
   if (data.kind === "failed-outcome") {
-    return [
-      ...(data.outcome_sha256
-        ? [{
-          id: "outcome_sha256",
-          label: "outcome_sha256",
-          value: <InlineCode>{data.outcome_sha256}</InlineCode>,
-        }]
-        : []),
-      { id: "code", label: "code", value: <InlineCode>{data.code}</InlineCode> },
-      { id: "recovery", label: "recovery", value: data.recovery },
-    ];
+    return [{ id: "code", label: "code", value: data.code }];
   }
-  const items = [
+  if (data.kind === "recorded-admitted-operating-point") {
+    return data.observables.slice(0, COMPACT_READING_LIMIT).map((observable) => ({
+      id: observable.nativeName,
+      label: observable.nativeName,
+      value: formatNumber(observable.value),
+      unit: observable.unit,
+    }));
+  }
+  if (data.kind === "operating-point") {
+    const voltages = sortedEntries(data.node_voltages).map(([name, value]) => ({
+      id: `v:${name}`,
+      label: name,
+      value: formatNumber(value),
+      unit: "V",
+    }));
+    const currents = sortedEntries(data.branch_currents_a).map(([name, value]) => ({
+      id: `i:${name}`,
+      label: name,
+      value: formatNumber(value),
+      unit: "A",
+    }));
+    return [...voltages, ...currents].slice(0, COMPACT_READING_LIMIT);
+  }
+  const voltages = sortedEntries(data.node_stats).map(([name, stats]) => ({
+    id: `v:${name}`,
+    label: `${name} final`,
+    value: formatNumber(stats.final_v),
+    unit: "V",
+  }));
+  const currents = sortedEntries(data.branch_current_stats_a).map(
+    ([name, stats]) => ({
+      id: `i:${name}`,
+      label: `${name} final`,
+      value: formatNumber(stats.final_a),
+      unit: "A",
+    }),
+  );
+  return [...voltages, ...currents].slice(0, COMPACT_READING_LIMIT);
+}
+
+function resultBody(data: SimulationViewData): ComponentChild {
+  if (data.kind === "failed-outcome") {
+    return (
+      <Stack gap="sm">
+        <Message tone="danger">{data.recovery}</Message>
+        <KeyValueList
+          items={[
+            {
+              id: "context",
+              label: "context",
+              value: <InlineCode>{JSON.stringify(data.context)}</InlineCode>,
+            },
+            ...(data.input_artifact_source_path
+              ? [{
+                id: "input_artifact_source_path",
+                label: "input_artifact_source_path",
+                value: <InlineCode>{data.input_artifact_source_path}</InlineCode>,
+              }]
+              : []),
+          ]}
+        />
+      </Stack>
+    );
+  }
+  if (data.kind === "recorded-admitted-operating-point") {
+    return (
+      <Stack gap="sm">
+        <KeyValueList
+          items={data.observables.map((observable) => ({
+            id: observable.nativeName,
+            label: observable.nativeName,
+            value: `${
+              formatNumber(observable.value)
+            } ${observable.unit} · ${observable.kind} · ${observable.sourceSymbol}`,
+          }))}
+        />
+        {data.execution
+          ? (
+            <KeyValueList
+              items={[
+                {
+                  id: "engine",
+                  label: "engine",
+                  value:
+                    `${data.execution.engine.name} ${data.execution.engine.version}`,
+                },
+                {
+                  id: "termination",
+                  label: "termination",
+                  value: data.execution.termination,
+                },
+                {
+                  id: "source_sha256",
+                  label: "source_sha256",
+                  value: <InlineCode>{data.execution.sourceSha256}</InlineCode>,
+                },
+                {
+                  id: "receipt_fingerprint",
+                  label: "receipt fingerprint",
+                  value: <InlineCode>{data.execution.receiptFingerprint}</InlineCode>,
+                },
+                {
+                  id: "evidence_sha256",
+                  label: "evidence_sha256",
+                  value: <InlineCode>{data.execution.evidenceSha256}</InlineCode>,
+                },
+                {
+                  id: "result_sha256",
+                  label: "result_sha256",
+                  value: <InlineCode>{data.execution.resultSha256}</InlineCode>,
+                },
+                {
+                  id: "observable_count",
+                  label: "observable_count",
+                  value: formatInteger(data.execution.counts.observableCount),
+                },
+              ]}
+            />
+          )
+          : null}
+        <KeyValueList
+          items={[
+            {
+              id: "project",
+              label: "project",
+              value: `${data.recorded.projectId}@r${data.recorded.projectRevision}`,
+            },
+            { id: "subject", label: "subject", value: data.recorded.subjectId },
+            {
+              id: "thread",
+              label: "thread",
+              value: `${data.recorded.thread.id}@r${data.recorded.thread.revision}`,
+            },
+            { id: "artifact", label: "artifact", value: data.recorded.artifact.id },
+            {
+              id: "artifact_fingerprint",
+              label: "artifact fingerprint",
+              value: <InlineCode>{data.recorded.artifact.fingerprint}</InlineCode>,
+            },
+            {
+              id: "projection_fingerprint",
+              label: "projection fingerprint",
+              value: <InlineCode>{data.recorded.projectionFingerprint}</InlineCode>,
+            },
+          ]}
+        />
+        {data.execution?.limitations.map((item) => (
+          <Message key={item} tone="neutral">{item}</Message>
+        ))}
+      </Stack>
+    );
+  }
+  return (
+    <Stack gap="sm">
+      {data.kind === "operating-point"
+        ? <KeyValueList items={operatingPointItems(data)} />
+        : (
+          <>
+            <KeyValueList items={analysisItems(data)} />
+            <KeyValueList items={statsItems(data)} />
+          </>
+        )}
+      {Object.keys(data.measurements).length > 0
+        ? (
+          <KeyValueList
+            items={sortedEntries(data.measurements).map(([name, measurement]) => ({
+              id: `measurement:${name}`,
+              label: `measurement.${name}`,
+              value: formatNumber(measurement.value),
+            }))}
+          />
+        )
+        : null}
+      <KeyValueList items={providerProvenanceItems(data)} />
+      {data.not_checked.length === 0
+        ? <EmptyState>No not_checked items were supplied.</EmptyState>
+        : data.not_checked.map((item, index) => (
+          <Message key={`not-checked-${index}`} tone="neutral">{item}</Message>
+        ))}
+    </Stack>
+  );
+}
+
+function operatingPointItems(
+  data: Extract<SimulationViewData, { kind: "operating-point" }>,
+) {
+  return [
+    ...sortedEntries(data.node_voltages).map(([name, value]) => ({
+      id: `node:${name}`,
+      label: `node_voltages.${name}`,
+      value: `${formatNumber(value)} V`,
+    })),
+    ...sortedEntries(data.branch_currents_a).map(([name, value]) => ({
+      id: `branch:${name}`,
+      label: `branch_currents_a.${name}`,
+      value: `${formatNumber(value)} A`,
+    })),
+  ];
+}
+
+function analysisItems(
+  data: Extract<SimulationViewData, { kind: "dc-sweep" | "transient-result" }>,
+) {
+  return data.kind === "dc-sweep"
+    ? [
+      { id: "source", label: "sweep.source", value: data.sweep.source },
+      {
+        id: "start_v",
+        label: "sweep.start_v",
+        value: `${formatNumber(data.sweep.start_v)} V`,
+      },
+      {
+        id: "stop_v",
+        label: "sweep.stop_v",
+        value: `${formatNumber(data.sweep.stop_v)} V`,
+      },
+      {
+        id: "step_v",
+        label: "sweep.step_v",
+        value: `${formatNumber(data.sweep.step_v)} V`,
+      },
+      {
+        id: "n_points",
+        label: "sweep.n_points",
+        value: formatInteger(data.sweep.n_points),
+      },
+      {
+        id: "max_points",
+        label: "sweep.max_points",
+        value: formatInteger(data.sweep.max_points),
+      },
+    ]
+    : [
+      {
+        id: "n_points",
+        label: "simulation.n_points",
+        value: formatInteger(data.simulation.n_points),
+      },
+      {
+        id: "tstop_s",
+        label: "simulation.tstop_s",
+        value: `${formatNumber(data.simulation.tstop_s)} s`,
+      },
+    ];
+}
+
+function statsItems(
+  data: Extract<SimulationViewData, { kind: "dc-sweep" | "transient-result" }>,
+) {
+  return [
+    ...sortedEntries(data.node_stats).map(([name, stats]) => ({
+      id: `node:${name}`,
+      label: `node_stats.${name}`,
+      value: voltageStats(data.kind, stats),
+    })),
+    ...sortedEntries(data.branch_current_stats_a).map(([name, stats]) => ({
+      id: `branch:${name}`,
+      label: `branch_current_stats_a.${name}`,
+      value: currentStats(data.kind, stats),
+    })),
+  ];
+}
+
+function voltageStats(
+  kind: "dc-sweep" | "transient-result",
+  stats: NodeVoltageStats,
+): string {
+  const axis = kind === "dc-sweep"
+    ? `${formatNumber(stats.min_at_source_v!)} / ${
+      formatNumber(stats.max_at_source_v!)
+    } / ${formatNumber(stats.final_at_source_v!)} V source`
+    : `${formatNumber(stats.min_at_s!)} / ${formatNumber(stats.max_at_s!)} / ${
+      formatNumber(stats.final_at_s!)
+    } s`;
+  return `min ${formatNumber(stats.min_v)} V · max ${
+    formatNumber(stats.max_v)
+  } V · final ${formatNumber(stats.final_v)} V · at ${axis}`;
+}
+
+function currentStats(
+  kind: "dc-sweep" | "transient-result",
+  stats: BranchCurrentStats,
+): string {
+  const axis = kind === "dc-sweep"
+    ? `${formatNumber(stats.min_at_source_v!)} / ${
+      formatNumber(stats.max_at_source_v!)
+    } / ${formatNumber(stats.final_at_source_v!)} V source`
+    : `${formatNumber(stats.min_at_s!)} / ${formatNumber(stats.max_at_s!)} / ${
+      formatNumber(stats.final_at_s!)
+    } s`;
+  return `min ${formatNumber(stats.min_a)} A · max ${
+    formatNumber(stats.max_a)
+  } A · final ${formatNumber(stats.final_a)} A · at ${axis}`;
+}
+
+function providerProvenanceItems(
+  data: Exclude<
+    SimulationViewData,
+    { kind: "failed-outcome" | "recorded-admitted-operating-point" }
+  >,
+): { id: string; label: string; value: ComponentChild }[] {
+  const items: { id: string; label: string; value: ComponentChild }[] = [
     {
       id: "netlist_sha256",
       label: "netlist SHA-256",
@@ -539,11 +521,7 @@ function provenanceItems(data: SimulationViewData): {
         label: "execution_state",
         value: data.documentary_receipt.execution_state,
       },
-      {
-        id: "documentary_only",
-        label: "documentary_only",
-        value: "true",
-      },
+      { id: "documentary_only", label: "documentary_only", value: "true" },
     );
   } else if (data.outcome_sha256) {
     items.push({
@@ -553,4 +531,14 @@ function provenanceItems(data: SimulationViewData): {
     });
   }
   return items;
+}
+
+function primaryProvenance(data: SimulationViewData): { label: string; value: string } {
+  if (data.kind === "recorded-admitted-operating-point") {
+    return { label: "artifact fingerprint", value: data.recorded.artifact.fingerprint };
+  }
+  if (data.kind === "failed-outcome") {
+    return { label: "outcome SHA-256", value: data.outcome_sha256 ?? data.code };
+  }
+  return { label: "netlist SHA-256", value: data.input_artifact.sha256 };
 }

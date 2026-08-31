@@ -679,7 +679,7 @@
           "npm:jose@6"
         ]
       },
-      "jsr:@casys/mcp-view-components@0.1.0": {
+      "jsr:@casys/mcp-view-components@0.2.0": {
         "dependencies": [
           "jsr:@deno/dnt@0.41",
           "jsr:@std/assert@1",
@@ -693,7 +693,7 @@
           "jsr:@std/assert@1"
         ]
       },
-      "jsr:@casys/mcp-view@0.9.0": {
+      "jsr:@casys/mcp-view@0.9.1": {
         "dependencies": [
           "jsr:@deno/dnt@0.41",
           "jsr:@std/assert@1",

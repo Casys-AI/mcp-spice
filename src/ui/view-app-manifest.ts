@@ -1,3 +1,5 @@
+/** Provider-owned compatibility declaration for direct and recorded SPICE views. */
+
 import {
   SPICE_DC_SWEEP_URI,
   SPICE_OPERATING_POINT_URI,
@@ -9,122 +11,97 @@ import {
   SPICE_VIEW_APP_TITLE,
   SPICE_VIEW_APP_VERSION,
 } from "./constants.ts";
-import { SPICE_COMPONENT_KEYS } from "./simulation-result/src/catalog.ts";
-import { SPICE_RECEIPT_COMPONENT_KEYS } from "./simulation-receipt/src/catalog.ts";
 
-const VIEW_APP_MANIFEST_SCHEMA = "io.casys.mcp.view-app-manifest/1.0" as const;
+export const SPICE_VIEW_APP_MANIFEST_SCHEMA =
+  "io.casys.mcp.view-app-manifest/1.0" as const;
+export const SPICE_VIEWER_SESSION_ACTION = "viewer.session.apply" as const;
 
-const resultComponents = {
-  [SPICE_COMPONENT_KEYS.simulationResult]: {
-    title: "Simulation result",
-    description:
-      "One compact operating-point, reduced DC sweep, reduced transient, or typed failure.",
-  },
-  [SPICE_COMPONENT_KEYS.nodeStatistics]: {
-    title: "Node statistics",
-    description:
-      "Requested node voltages or reduced voltage statistics from the actual schema.",
-  },
-  [SPICE_COMPONENT_KEYS.currentStatistics]: {
-    title: "Current statistics",
-    description:
-      "Requested branch currents or reduced current statistics from the actual schema.",
-  },
-  [SPICE_COMPONENT_KEYS.analysisFacts]: {
-    title: "Analysis facts",
-    description: "Sweep or transient window facts when the schema supplies them.",
-  },
-  [SPICE_COMPONENT_KEYS.receiptProvenance]: {
-    title: "Documentary receipt provenance",
-    description:
-      "Documentary identities from the live receipt reference or durable outcome envelope.",
-  },
-  [SPICE_COMPONENT_KEYS.notChecked]: {
-    title: "Not checked",
-    description: "Declared analysis limits copied from not_checked.",
-  },
-};
+export const SPICE_RECORDED_SESSION_SCHEMA_IDS = {
+  operatingPoint: "io.casys.mcp-spice.recorded-operating-point-session/1.0",
+  dcSweep: "io.casys.mcp-spice.recorded-dc-sweep-session/1.0",
+  transientResult: "io.casys.mcp-spice.recorded-transient-result-session/1.0",
+  simulationOutcome: "io.casys.mcp-spice.recorded-simulation-outcome-session/1.0",
+  simulationReceipt: "io.casys.mcp-spice.recorded-simulation-receipt-session/1.0",
+} as const;
 
-const resultDefaultSurface = {
-  layout: { type: "stack", gap: "sm" },
-  components: [
-    { id: "result", component: SPICE_COMPONENT_KEYS.simulationResult },
-  ],
-};
+/**
+ * Exact persisted sources understood by the operating-point session adapter.
+ * The two admitted schemas are read as-is; the host does not synthesize an
+ * mcp-spice tool result from Digital Thread evidence.
+ */
+export const SPICE_RECORDED_OPERATING_POINT_SOURCE_SCHEMA_IDS = [
+  SPICE_RESULT_SCHEMA_IDS.operatingPoint,
+  "spice-operating-point-result/1.0",
+  "spice-admitted-execution-capture/1.0",
+] as const;
 
-const resultCatalog = {
-  components: resultComponents,
-  defaultSurface: resultDefaultSurface,
-};
+export const SPICE_VIEW_CONTRACTS = {
+  operatingPoint: {
+    uri: SPICE_OPERATING_POINT_URI,
+    resultSchema: SPICE_RESULT_SCHEMA_IDS.operatingPoint,
+    sessionSchema: SPICE_RECORDED_SESSION_SCHEMA_IDS.operatingPoint,
+  },
+  dcSweep: {
+    uri: SPICE_DC_SWEEP_URI,
+    resultSchema: SPICE_RESULT_SCHEMA_IDS.dcSweep,
+    sessionSchema: SPICE_RECORDED_SESSION_SCHEMA_IDS.dcSweep,
+  },
+  transientResult: {
+    uri: SPICE_TRANSIENT_RESULT_URI,
+    resultSchema: SPICE_RESULT_SCHEMA_IDS.transientResult,
+    sessionSchema: SPICE_RECORDED_SESSION_SCHEMA_IDS.transientResult,
+  },
+  simulationOutcome: {
+    uri: SPICE_SIMULATION_OUTCOME_URI,
+    resultSchema: SPICE_RESULT_SCHEMA_IDS.simulationOutcome,
+    sessionSchema: SPICE_RECORDED_SESSION_SCHEMA_IDS.simulationOutcome,
+  },
+  simulationReceipt: {
+    uri: SPICE_SIMULATION_RECEIPT_URI,
+    resultSchema: SPICE_RESULT_SCHEMA_IDS.simulationReceipt,
+    sessionSchema: SPICE_RECORDED_SESSION_SCHEMA_IDS.simulationReceipt,
+  },
+} as const;
 
-export const SPICE_VIEW_APP_MANIFEST = {
-  schemaVersion: VIEW_APP_MANIFEST_SCHEMA,
-  app: {
+export type SpiceViewKey = keyof typeof SPICE_VIEW_CONTRACTS;
+
+export interface SpiceViewAppResource {
+  readonly uri: (typeof SPICE_VIEW_CONTRACTS)[SpiceViewKey]["uri"];
+  readonly ownership: "whole-view";
+  readonly resultSchemas: readonly string[];
+  readonly acceptedActions: readonly [typeof SPICE_VIEWER_SESSION_ACTION];
+  readonly sessionSchemas: readonly string[];
+}
+
+const resources: readonly SpiceViewAppResource[] = Object.values(
+  SPICE_VIEW_CONTRACTS,
+).map((contract) => ({
+  uri: contract.uri,
+  ownership: "whole-view",
+  resultSchemas: [contract.resultSchema],
+  acceptedActions: [SPICE_VIEWER_SESSION_ACTION],
+  sessionSchemas: [contract.sessionSchema],
+}));
+
+/**
+ * Presentation compatibility only. No endpoint, credentials, tool arguments,
+ * Digital Thread anchor, or live execution policy belongs in this manifest.
+ */
+export const SPICE_VIEW_APP_MANIFEST = Object.freeze({
+  schemaVersion: SPICE_VIEW_APP_MANIFEST_SCHEMA,
+  app: Object.freeze({
     id: SPICE_VIEW_APP_ID,
     title: SPICE_VIEW_APP_TITLE,
     version: SPICE_VIEW_APP_VERSION,
-  },
-  resources: [
-    {
-      uri: SPICE_OPERATING_POINT_URI,
-      ownership: "whole-view",
-      resultSchemas: [SPICE_RESULT_SCHEMA_IDS.operatingPoint],
-      components: resultCatalog,
-    },
-    {
-      uri: SPICE_DC_SWEEP_URI,
-      ownership: "whole-view",
-      resultSchemas: [SPICE_RESULT_SCHEMA_IDS.dcSweep],
-      components: resultCatalog,
-    },
-    {
-      uri: SPICE_TRANSIENT_RESULT_URI,
-      ownership: "whole-view",
-      resultSchemas: [SPICE_RESULT_SCHEMA_IDS.transientResult],
-      components: resultCatalog,
-    },
-    {
-      uri: SPICE_SIMULATION_OUTCOME_URI,
-      ownership: "whole-view",
-      resultSchemas: [
-        SPICE_RESULT_SCHEMA_IDS.operatingPoint,
-        SPICE_RESULT_SCHEMA_IDS.dcSweep,
-        SPICE_RESULT_SCHEMA_IDS.transientResult,
-        SPICE_RESULT_SCHEMA_IDS.simulationOutcome,
-      ],
-      components: resultCatalog,
-    },
-    {
-      uri: SPICE_SIMULATION_RECEIPT_URI,
-      ownership: "whole-view",
-      resultSchemas: [SPICE_RESULT_SCHEMA_IDS.simulationReceipt],
-      components: {
-        components: {
-          [SPICE_RECEIPT_COMPONENT_KEYS.receipt]: {
-            title: "Simulation receipt",
-            description:
-              "One documentary receipt identity with the literal execution_state.",
-          },
-          [SPICE_RECEIPT_COMPONENT_KEYS.identities]: {
-            title: "Receipt identities",
-            description: "SHA-256 identities bound by the documentary receipt.",
-          },
-          [SPICE_RECEIPT_COMPONENT_KEYS.runtimeIdentity]: {
-            title: "Runtime identity",
-            description: "Provider, budget, Deno, and ngspice identity fields.",
-          },
-          [SPICE_RECEIPT_COMPONENT_KEYS.normalizedRequest]: {
-            title: "Normalized request",
-            description: "Canonical request fields stored on the receipt.",
-          },
-        },
-        defaultSurface: {
-          layout: { type: "stack", gap: "sm" },
-          components: [
-            { id: "receipt", component: SPICE_RECEIPT_COMPONENT_KEYS.receipt },
-          ],
-        },
-      },
-    },
-  ],
-} as const;
+  }),
+  resources: Object.freeze(
+    resources.map((resource) =>
+      Object.freeze({
+        ...resource,
+        resultSchemas: Object.freeze([...resource.resultSchemas]),
+        acceptedActions: Object.freeze([...resource.acceptedActions]),
+        sessionSchemas: Object.freeze([...resource.sessionSchemas]),
+      })
+    ),
+  ),
+});

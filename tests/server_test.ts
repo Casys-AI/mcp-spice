@@ -59,7 +59,7 @@ const PACKAGE_VERSION = (JSON.parse(
 ) as { version: string }).version;
 
 Deno.test("deno package and server runtime identities stay lockstep", () => {
-  assertEquals(PACKAGE_VERSION, "0.6.0");
+  assertEquals(PACKAGE_VERSION, "0.6.1");
   assertEquals(SERVER_VERSION, PACKAGE_VERSION);
   assertEquals(MCP_SPICE_VERSION, SERVER_VERSION);
 });

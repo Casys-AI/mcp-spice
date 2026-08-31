@@ -10,18 +10,24 @@ import {
   type PreactSurfaceContext,
 } from "@casys/mcp-view-components/preact";
 import {
-  Card,
+  ElementBody,
   ElementIdent,
   ElementProvenance,
   ElementReading,
   InlineCode,
   KeyValueList,
-  Message,
   SemanticElement,
+  Stack,
 } from "@casys/mcp-view-components/preact/components";
-import { SPICE_RECEIPT_COMPONENT_KEYS, SPICE_RECEIPT_SURFACE } from "./catalog.ts";
-import type { NormalizedRequest, ReceiptViewData, RuntimeIdentity } from "./model.ts";
+import { SPICE_RECEIPT_COMPONENT } from "../../constants.ts";
 import { formatNumber } from "../../shared/format.ts";
+import type { NormalizedRequest, ReceiptViewData, RuntimeIdentity } from "./model.ts";
+
+export { SPICE_RECEIPT_COMPONENT };
+export const SPICE_RECEIPT_SURFACE = {
+  layout: { type: "stack", gap: "sm" },
+  components: [{ id: "receipt", component: SPICE_RECEIPT_COMPONENT }],
+} as const;
 
 type ReceiptProps = PreactSurfaceComponentProps<ReceiptViewData>;
 
@@ -41,7 +47,7 @@ const Receipt = ({ data }: ReceiptProps) => {
         <ElementIdent
           marker={data.receipt.analysis_kind.toUpperCase()}
           label="Simulation receipt"
-          detail="Documentary provider record"
+          detail="Exact documentary provider record"
         />
       }
       reading={
@@ -51,9 +57,36 @@ const Receipt = ({ data }: ReceiptProps) => {
         />
       }
       body={
-        <Message tone="neutral">
-          documentary_only · not Digital Thread evidence
-        </Message>
+        <ElementBody>
+          <Stack gap="sm">
+            <KeyValueList items={requestItems(data.receipt.normalized_request)} />
+            <KeyValueList items={runtimeItems(data.receipt.runtime_identity)} />
+            <KeyValueList
+              items={[
+                {
+                  id: "request_sha256",
+                  label: "request_sha256",
+                  value: <InlineCode>{data.receipt.request_sha256}</InlineCode>,
+                },
+                {
+                  id: "dispatch_sha256",
+                  label: "dispatch_sha256",
+                  value: <InlineCode>{data.receipt.dispatch_sha256}</InlineCode>,
+                },
+                {
+                  id: "netlist_sha256",
+                  label: "netlist_sha256",
+                  value: <InlineCode>{data.receipt.netlist_sha256}</InlineCode>,
+                },
+                {
+                  id: "outcome_sha256",
+                  label: "outcome_sha256",
+                  value: <InlineCode>{data.receipt.outcome_sha256}</InlineCode>,
+                },
+              ]}
+            />
+          </Stack>
+        </ElementBody>
       }
       provenance={
         <ElementProvenance
@@ -65,90 +98,18 @@ const Receipt = ({ data }: ReceiptProps) => {
   );
 };
 
-const Identities = ({ data }: ReceiptProps) => (
-  <Card title="Receipt identities" eyebrow="SHA-256">
-    <KeyValueList
-      items={[
-        {
-          id: "receipt_sha256",
-          label: "receipt_sha256",
-          value: <InlineCode>{data.receipt_sha256}</InlineCode>,
-        },
-        {
-          id: "request_sha256",
-          label: "request_sha256",
-          value: <InlineCode>{data.receipt.request_sha256}</InlineCode>,
-        },
-        {
-          id: "dispatch_sha256",
-          label: "dispatch_sha256",
-          value: <InlineCode>{data.receipt.dispatch_sha256}</InlineCode>,
-        },
-        {
-          id: "netlist_sha256",
-          label: "netlist_sha256",
-          value: <InlineCode>{data.receipt.netlist_sha256}</InlineCode>,
-        },
-        {
-          id: "outcome_sha256",
-          label: "outcome_sha256",
-          value: <InlineCode>{data.receipt.outcome_sha256}</InlineCode>,
-        },
-        {
-          id: "execution_state",
-          label: "execution_state",
-          value: data.receipt.execution_state,
-        },
-      ]}
-    />
-  </Card>
-);
-
-const Runtime = ({ data }: ReceiptProps) => (
-  <Card title="Runtime identity" eyebrow="Provider environment">
-    <KeyValueList items={runtimeItems(data.receipt.runtime_identity)} />
-  </Card>
-);
-
-const Request = ({ data }: ReceiptProps) => (
-  <Card title="Normalized request" eyebrow={data.receipt.analysis_kind}>
-    <KeyValueList items={requestItems(data.receipt.normalized_request)} />
-  </Card>
-);
-
 export const SPICE_RECEIPT_REGISTRY = defineComponentRegistry<
   ReceiptViewData,
   PreactSurfaceContext<ReceiptViewData>
 >({
   components: {
-    [SPICE_RECEIPT_COMPONENT_KEYS.receipt]: definePreactComponent(
+    [SPICE_RECEIPT_COMPONENT]: definePreactComponent(
       {
-        title: "Simulation receipt",
+        title: "SPICE simulation receipt",
         description:
-          "One documentary receipt identity with the literal execution_state.",
+          "One exact receipt with request, runtime, terminal state, and documentary identities.",
       },
       Receipt,
-    ),
-    [SPICE_RECEIPT_COMPONENT_KEYS.identities]: definePreactComponent(
-      {
-        title: "Receipt identities",
-        description: "SHA-256 identities bound by the documentary receipt.",
-      },
-      Identities,
-    ),
-    [SPICE_RECEIPT_COMPONENT_KEYS.runtimeIdentity]: definePreactComponent(
-      {
-        title: "Runtime identity",
-        description: "Provider, budget, Deno, and ngspice identity fields.",
-      },
-      Runtime,
-    ),
-    [SPICE_RECEIPT_COMPONENT_KEYS.normalizedRequest]: definePreactComponent(
-      {
-        title: "Normalized request",
-        description: "Canonical request fields stored on the receipt.",
-      },
-      Request,
     ),
   },
   defaultSurface: defineComponentSurface(SPICE_RECEIPT_SURFACE),
@@ -166,11 +127,7 @@ function runtimeItems(identity: RuntimeIdentity) {
       label: "execution_budgets",
       value: identity.execution_budgets,
     },
-    {
-      id: "deno_version",
-      label: "deno_version",
-      value: identity.deno_version,
-    },
+    { id: "deno_version", label: "deno_version", value: identity.deno_version },
     { id: "os", label: "os", value: identity.os },
     { id: "arch", label: "arch", value: identity.arch },
     {
@@ -197,46 +154,22 @@ function requestItems(request: NormalizedRequest) {
     {
       id: "timeout_s",
       label: "timeout_s",
-      value: formatNumber(request.timeout_s),
+      value: `${formatNumber(request.timeout_s)} s`,
     },
   ];
   if (request.kind === "tran") {
     return [
-      {
-        id: "tstep_s",
-        label: "tstep_s",
-        value: `${formatNumber(request.tstep_s)} s`,
-      },
-      {
-        id: "tstop_s",
-        label: "tstop_s",
-        value: `${formatNumber(request.tstop_s)} s`,
-      },
+      { id: "tstep_s", label: "tstep_s", value: `${formatNumber(request.tstep_s)} s` },
+      { id: "tstop_s", label: "tstop_s", value: `${formatNumber(request.tstop_s)} s` },
       ...shared,
     ];
   }
   if (request.kind === "dc") {
     return [
-      {
-        id: "sweep_source",
-        label: "sweep_source",
-        value: request.sweep_source,
-      },
-      {
-        id: "start_v",
-        label: "start_v",
-        value: `${formatNumber(request.start_v)} V`,
-      },
-      {
-        id: "stop_v",
-        label: "stop_v",
-        value: `${formatNumber(request.stop_v)} V`,
-      },
-      {
-        id: "step_v",
-        label: "step_v",
-        value: `${formatNumber(request.step_v)} V`,
-      },
+      { id: "sweep_source", label: "sweep_source", value: request.sweep_source },
+      { id: "start_v", label: "start_v", value: `${formatNumber(request.start_v)} V` },
+      { id: "stop_v", label: "stop_v", value: `${formatNumber(request.stop_v)} V` },
+      { id: "step_v", label: "step_v", value: `${formatNumber(request.step_v)} V` },
       ...shared,
     ];
   }

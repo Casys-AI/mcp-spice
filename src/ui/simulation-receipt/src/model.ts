@@ -89,6 +89,15 @@ export function parseReceiptViewData(value: unknown): ReceiptViewData {
   return { kind: "simulation-receipt", receipt_sha256, receipt };
 }
 
+export function isReceiptViewData(value: unknown): boolean {
+  try {
+    parseReceiptViewData(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function displayStateFromReceiptToolResult(
   value: unknown,
 ): ReceiptDisplayState {
