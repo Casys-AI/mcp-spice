@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file. Format:
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-08-31
+
 ### Added
 
 - Native MCP Apps resources for bounded simulation results: operating point, reduced DC
@@ -19,6 +21,9 @@ All notable changes to this project will be documented in this file. Format:
   `viewer.session.apply` contracts. The operating-point receiver also reads exact
   `spice-operating-point-result/1.0` and `spice-admitted-execution-capture/1.0` recorded
   artifacts without asking Digital Thread to synthesize an mcp-spice result.
+- A concise product README with a screenshot from an exact recorded SPICE artifact, plus
+  dedicated technical documentation for API use, Apps, durable records, security, and
+  development.
 
 ### Changed
 

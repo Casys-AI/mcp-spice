@@ -21,7 +21,7 @@ const receipt = parseReceiptViewData({
     netlist_sha256: "4".repeat(64),
     normalized_request: { nodes: ["out"], branch_sources: [], timeout_s: 30 },
     runtime_identity: {
-      mcp_spice_version: "0.6.1",
+      mcp_spice_version: "0.6.2",
       execution_budgets: "execution-budgets/1.0",
       deno_version: "2.9.6",
       os: "linux",

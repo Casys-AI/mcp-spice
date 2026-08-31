@@ -1,6 +1,6 @@
 {
   "name": "@casys/mcp-spice",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "minimumDependencyAge": {
     "age": "P1D",
     "exclude": ["jsr:@casys/mcp-server"]
@@ -32,6 +32,8 @@
       "src/ui/dist/**/*.html",
       "src/ui/view-app-manifest.json",
       "README.md",
+      "docs/**/*.md",
+      "docs/images/**/*.png",
       "CHANGELOG.md",
       "SECURITY.md",
       "CITATION.cff",

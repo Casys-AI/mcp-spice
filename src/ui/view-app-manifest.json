@@ -3,7 +3,7 @@
   "app": {
     "id": "io.casys.mcp-spice.results",
     "title": "SPICE Simulation Results",
-    "version": "0.6.1"
+    "version": "0.6.2"
   },
   "resources": [
     {

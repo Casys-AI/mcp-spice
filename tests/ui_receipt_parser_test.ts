@@ -25,7 +25,7 @@ const receipt = {
     timeout_s: 30,
   },
   runtime_identity: {
-    mcp_spice_version: "0.6.1",
+    mcp_spice_version: "0.6.2",
     execution_budgets: "execution-budgets/1.0",
     deno_version: "2.9.6",
     os: "linux",

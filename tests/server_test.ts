@@ -59,7 +59,7 @@ const PACKAGE_VERSION = (JSON.parse(
 ) as { version: string }).version;
 
 Deno.test("deno package and server runtime identities stay lockstep", () => {
-  assertEquals(PACKAGE_VERSION, "0.6.1");
+  assertEquals(PACKAGE_VERSION, "0.6.2");
   assertEquals(SERVER_VERSION, PACKAGE_VERSION);
   assertEquals(MCP_SPICE_VERSION, SERVER_VERSION);
 });
@@ -622,7 +622,16 @@ Deno.test(
     const manifest = JSON.parse(
       Deno.readTextFileSync(new URL("../deno.json", import.meta.url)),
     ) as { publish: { include: string[] } };
-    for (const file of ["README.md", "CHANGELOG.md", "SECURITY.md", "CITATION.cff"]) {
+    for (
+      const file of [
+        "README.md",
+        "docs/**/*.md",
+        "docs/images/**/*.png",
+        "CHANGELOG.md",
+        "SECURITY.md",
+        "CITATION.cff",
+      ]
+    ) {
       assert(
         manifest.publish.include.includes(file),
         `${file} must be included in the JSR package because README links it relatively.`,
