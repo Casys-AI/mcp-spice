@@ -48,13 +48,13 @@
     "@std/streams/text-line-stream": "jsr:@std/streams@^1/text-line-stream"
   },
   "fmt": {
-    "exclude": ["src/ui/dist"],
+    "exclude": ["src/ui/dist", ".deps"],
     "lineWidth": 88,
     "semiColons": true,
     "singleQuote": false
   },
   "lint": {
-    "exclude": ["src/ui/dist"],
+    "exclude": ["src/ui/dist", ".deps"],
     "rules": {
       "include": ["no-unused-vars", "no-explicit-any"]
     }
