@@ -35,7 +35,7 @@ transport on port `3023`:
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice:0.6.2 http
+  ghcr.io/casys-ai/mcp-spice@sha256:e5bcf112ec37d71d9a02dfcb1c65af0ed77fe497e97e16e931bfb6baa0dd367d http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. Native stdio is available from the same
@@ -44,7 +44,7 @@ image:
 ```bash
 docker run --rm -i \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice:0.6.2 stdio
+  ghcr.io/casys-ai/mcp-spice@sha256:e5bcf112ec37d71d9a02dfcb1c65af0ed77fe497e97e16e931bfb6baa0dd367d stdio
 ```
 
 To run the published JSR module, install `ngspice` on the host, then use the exact

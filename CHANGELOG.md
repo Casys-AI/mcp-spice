@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file. Format:
 
 ## [Unreleased]
 
+### Documentation
+
+- Pin the published 0.6.2 multi-architecture image by its immutable OCI index digest.
+
 ## [0.6.2] - 2026-08-31
 
 ### Added
