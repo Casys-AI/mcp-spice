@@ -9,9 +9,9 @@ compact, structured results tied to the exact input bytes.
 
 **Release status.** Version `0.6.0` is published on JSR and as a native-gated,
 multi-architecture GHCR image. The immutable OCI index digest is
-`sha256:5991ad186da859b66dda078e0c80ce76765d544c920e38beafa48bba77744873`.
-The main workflow qualified the exact JSR package; the `v0.6.0` tag separately
-qualified and published the image.
+`sha256:5991ad186da859b66dda078e0c80ce76765d544c920e38beafa48bba77744873`. The main
+workflow qualified the exact JSR package; the `v0.6.0` tag separately qualified and
+published the image.
 
 Historical 0.3.0 context: that release's JSR package and digest-pinned image had package
 version `0.3.0`, but leftover `VERSION` `0.1.0` in `server.ts` meant `server/discover`
@@ -152,6 +152,13 @@ The table below describes the 0.6.0 surface. Historical 0.3.0 context:
 | `spice_simulation_receipt_get`  | Read one immutable documentary receipt        | `receipt_sha256`                                                                                                                                                      | Exact receipt after receipt/result/netlist rehash checks                                                                     |
 | `spice_simulation_result_get`   | Read one immutable documentary outcome        | `outcome_sha256`                                                                                                                                                      | Exact bounded outcome after byte rehash                                                                                      |
 | `spice_simulation_dispatch_get` | Inspect recovery state                        | `request_sha256`                                                                                                                                                      | Acknowledged request and optional terminal publication                                                                       |
+
+MCP Apps hosts that understand `ui://` resources can render the simulation results and
+documentary readback as compact MCP View v2 surfaces. The tools keep their existing
+names, wire schemas, and text `content` fallback. `ngspice_netlist_submit` remains a
+text confirmation. Full DC and transient curves are still not returned, so the viewers
+do not invent plots or samples. `succeeded` remains `succeeded`; it is never shown as
+pass, proof, or compliance.
 
 Each registered operation is non-destructive, idempotent, and closed-world. Simulation
 calls default to a 30-second timeout; `timeout_s` outside 1–300 seconds is refused. Both
@@ -575,8 +582,18 @@ deno task lint           # lint
 deno task fmt            # format check
 deno task test           # test without requiring ngspice
 SPICE_RUN_NATIVE=1 deno task test  # include native ngspice integration
-deno task release:check  # fmt + check + lint + test
+deno task build:ui       # rebuild MCP Apps HTML from audited mcp-view sources
+deno task test:ui        # component catalog tests against those sources
+deno task check:ui:bundle  # rebuild and require a byte-identical committed HTML
+deno task release:check  # fmt + check + lint + test + UI catalog + freshness
 ```
+
+Viewer builds require the exact split MCP View v2 packages from `Casys-AI/mcp-server` at
+`8fad891839203122efbe2438ba81a6e7d08c9202`. Point `MCP_VIEW_LOCAL_ROOT`,
+`MCP_VIEW_CONTRACTS_LOCAL_ROOT`, and `MCP_VIEW_COMPONENTS_LOCAL_ROOT` at that checkout's
+`packages/view`, `packages/view-contracts`, and `packages/view-components`. There is no
+published compatibility fallback. The dedicated `src/ui/deno.lock` is used with
+`--frozen`.
 
 The `main` publication workflow installs ngspice and runs the full native suite before
 it can publish the JSR package.

@@ -8,10 +8,11 @@
  * Default port: 3023. Override with --port=<n> or MCP_PORT env var.
  */
 
-import { McpApp } from "@casys/mcp-server";
+import { McpApp, type RegisterViewersSummary } from "@casys/mcp-server";
 import { MCP_SPICE_VERSION } from "./src/api/simulation-receipts.ts";
 import { mapSpiceToolError } from "./src/api/tool-error.ts";
 import { SpiceToolsClient } from "./src/client.ts";
+import { registerSpiceViewers, type SpiceViewerFileSystem } from "./src/viewers.ts";
 
 /** Public runtime identity; kept lockstep with deno.json by the test suite. */
 export const SERVER_VERSION = MCP_SPICE_VERSION;
@@ -20,11 +21,13 @@ const DEFAULT_HOSTNAME = "127.0.0.1";
 
 export interface CreateSpiceServerOptions {
   logger?: (message: string) => void;
+  viewerFileSystem?: SpiceViewerFileSystem;
+  viewerModuleUrl?: string;
 }
 
 export function createSpiceServer(
   options: CreateSpiceServerOptions = {},
-): { app: McpApp } {
+): { app: McpApp; viewerRegistration: RegisterViewersSummary } {
   const client = new SpiceToolsClient();
   const handlers = client.buildHandlersMap();
 
@@ -63,7 +66,12 @@ export function createSpiceServer(
   });
 
   app.registerTools(client.toMCPFormat(), handlers);
-  return { app };
+  const viewerRegistration = registerSpiceViewers(
+    app,
+    options.viewerFileSystem,
+    options.viewerModuleUrl ?? import.meta.url,
+  );
+  return { app, viewerRegistration };
 }
 
 export interface CliArgs {
@@ -107,7 +115,12 @@ export function parseCli(args: string[]): CliArgs {
 
 if (import.meta.main) {
   const cli = parseCli(Deno.args);
-  const { app } = createSpiceServer();
+  const { app, viewerRegistration } = createSpiceServer();
+  if (viewerRegistration.registered.length === 0) {
+    console.error(
+      "[mcp-spice] MCP Apps viewers are not built; run `deno task build:ui`.",
+    );
+  }
   if (cli.stdio) {
     await app.start();
   } else {

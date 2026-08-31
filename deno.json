@@ -7,10 +7,13 @@
   },
   "tasks": {
     "serve": "deno run --allow-all server.ts --port=3023",
-    "check": "deno check mod.ts server.ts src/client.ts src/api/documented-simulation.ts src/api/execution-budgets.ts src/api/ngspice.ts src/api/netlist-artifact.ts src/api/netlist-security.ts src/api/netlist-store.ts src/api/netlist-resolve.ts src/api/simulation-receipts.ts src/api/tool-error.ts src/tools/types.ts src/tools/mod.ts src/tools/op.ts src/tools/tran.ts src/tools/dc.ts src/tools/receipts.ts src/tools/submit.ts scripts/gen_fixtures.ts",
+    "check": "deno check mod.ts server.ts src/client.ts src/viewers.ts src/api/documented-simulation.ts src/api/execution-budgets.ts src/api/ngspice.ts src/api/netlist-artifact.ts src/api/netlist-security.ts src/api/netlist-store.ts src/api/netlist-resolve.ts src/api/simulation-receipts.ts src/api/tool-error.ts src/tools/types.ts src/tools/mod.ts src/tools/op.ts src/tools/tran.ts src/tools/dc.ts src/tools/receipts.ts src/tools/submit.ts src/ui/constants.ts src/ui/local-modules.ts src/ui/build.ts src/ui/check-bundle.ts src/ui/view-app-manifest.ts scripts/gen_fixtures.ts",
     "lint": "deno lint",
     "fmt": "deno fmt --check deno.json mod.ts server.ts src tests scripts",
-    "release:check": "deno task fmt && deno task check && deno task lint && deno task test",
+    "build:ui": "deno run --config deno.json --lock=deno.lock --frozen -A src/ui/build.ts",
+    "check:ui:bundle": "deno run --config deno.json --lock=deno.lock --frozen -A src/ui/check-bundle.ts",
+    "test:ui": "deno run --config deno.json --lock=deno.lock --frozen -A src/ui/test.ts",
+    "release:check": "deno task fmt && deno task check && deno task lint && deno task test && deno task test:ui && deno task check:ui:bundle",
     "test": "deno test --allow-all tests/"
   },
   "exports": {
@@ -22,6 +25,10 @@
       "mod.ts",
       "server.ts",
       "src/**/*.ts",
+      "src/**/*.tsx",
+      "src/**/*.css",
+      "src/**/*.html",
+      "src/ui/dist/**/*.html",
       "README.md",
       "CHANGELOG.md",
       "SECURITY.md",
@@ -41,11 +48,13 @@
     "@std/streams/text-line-stream": "jsr:@std/streams@^1/text-line-stream"
   },
   "fmt": {
+    "exclude": ["src/ui/dist"],
     "lineWidth": 88,
     "semiColons": true,
     "singleQuote": false
   },
   "lint": {
+    "exclude": ["src/ui/dist"],
     "rules": {
       "include": ["no-unused-vars", "no-explicit-any"]
     }

@@ -34,6 +34,7 @@ import {
 import { getNetlistPath, putNetlistBytes } from "../api/netlist-store.ts";
 import { runNgspiceOp } from "../api/ngspice.ts";
 import { SpiceToolError } from "../api/tool-error.ts";
+import { SPICE_OPERATING_POINT_URI } from "../ui/constants.ts";
 import type { SpiceTool } from "./types.ts";
 
 const TOOL_NAME = "spice_simulate_op";
@@ -243,6 +244,7 @@ export const opTool: SpiceTool = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  _meta: { ui: { resourceUri: SPICE_OPERATING_POINT_URI } },
   handler: async (args: Record<string, unknown>) => {
     const nodes = readNameList(args["nodes"], "nodes", "node");
     const branchSources = readNameList(

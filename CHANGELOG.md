@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file. Format:
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Versioning:
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Native MCP Apps resources for bounded simulation results: operating point, reduced DC
+  sweep, reduced transient, durable outcome readback, and documentary receipt readback.
+  Each whole-view defaults to one compact semantic result. Host-selectable catalog
+  entries cover node/current statistics, sweep or transient facts, documentary receipt
+  provenance, and `not_checked` limits. Visual primitives come from
+  `@casys/mcp-view-components`; this server keeps schema adapters only.
+  `ngspice_netlist_submit` and dispatch recovery stay text-only.
+
+### Changed
+
+- Single-file HTML builds are reproducible from the exact split MCP View packages at
+  `8fad891839203122efbe2438ba81a6e7d08c9202`, a dedicated npm/JSR lock with `--frozen`,
+  and a rebuild freshness gate.
+
 ## [0.6.0] - 2026-08-30
 
 ### Added

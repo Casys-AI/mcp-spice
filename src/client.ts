@@ -23,6 +23,7 @@ export class SpiceToolsClient {
     inputSchema: Record<string, unknown>;
     outputSchema: Record<string, unknown>;
     annotations: Record<string, unknown>;
+    _meta?: Record<string, unknown>;
   }> {
     return this.tools.map((t) => ({
       name: t.name,
@@ -30,6 +31,7 @@ export class SpiceToolsClient {
       inputSchema: t.inputSchema,
       outputSchema: t.outputSchema,
       annotations: t.annotations,
+      ...(t._meta ? { _meta: t._meta } : {}),
     }));
   }
 

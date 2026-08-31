@@ -31,6 +31,7 @@ import {
   runNgspiceDc,
 } from "../api/ngspice.ts";
 import { SpiceToolError } from "../api/tool-error.ts";
+import { SPICE_DC_SWEEP_URI } from "../ui/constants.ts";
 import type { SpiceTool } from "./types.ts";
 
 const TOOL_NAME = "spice_simulate_dc";
@@ -282,6 +283,7 @@ export const dcTool: SpiceTool = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  _meta: { ui: { resourceUri: SPICE_DC_SWEEP_URI } },
   handler: async (args: Record<string, unknown>) => {
     const sweepSource = requireSource(args["sweep_source"]);
     const start_v = requireFinite(args["start_v"], "start_v");

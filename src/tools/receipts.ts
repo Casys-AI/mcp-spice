@@ -18,6 +18,10 @@ import { DC_OUTPUT_SCHEMA } from "./dc.ts";
 import { OP_OUTPUT_SCHEMA } from "./op.ts";
 import { TRAN_OUTPUT_SCHEMA } from "./tran.ts";
 import type { SpiceTool } from "./types.ts";
+import {
+  SPICE_SIMULATION_OUTCOME_URI,
+  SPICE_SIMULATION_RECEIPT_URI,
+} from "../ui/constants.ts";
 
 const SHA256_DESCRIPTION = "64-character lowercase hexadecimal SHA-256 identity.";
 const SHA256_SCHEMA = {
@@ -273,6 +277,7 @@ export const receiptGetTool: SpiceTool = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  _meta: { ui: { resourceUri: SPICE_SIMULATION_RECEIPT_URI } },
   handler: async (args) => {
     const receipt_sha256 = requireDigest(
       args,
@@ -325,6 +330,7 @@ export const resultGetTool: SpiceTool = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  _meta: { ui: { resourceUri: SPICE_SIMULATION_OUTCOME_URI } },
   handler: async (args) => {
     const outcome_sha256 = requireDigest(
       args,

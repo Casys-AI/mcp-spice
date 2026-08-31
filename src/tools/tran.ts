@@ -32,6 +32,7 @@ import {
 import { getNetlistPath, putNetlistBytes } from "../api/netlist-store.ts";
 import { runNgspiceTran } from "../api/ngspice.ts";
 import { SpiceToolError } from "../api/tool-error.ts";
+import { SPICE_TRANSIENT_RESULT_URI } from "../ui/constants.ts";
 import type { SpiceTool } from "./types.ts";
 
 const TOOL_NAME = "spice_simulate_tran";
@@ -279,6 +280,7 @@ export const tranTool: SpiceTool = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  _meta: { ui: { resourceUri: SPICE_TRANSIENT_RESULT_URI } },
   handler: async (args: Record<string, unknown>) => {
     const tstep_s = requirePositiveFinite(args["tstep_s"], "tstep_s");
     const tstop_s = requirePositiveFinite(args["tstop_s"], "tstop_s");

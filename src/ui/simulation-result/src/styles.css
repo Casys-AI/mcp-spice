@@ -1,0 +1,13 @@
+body {
+  min-width: 0;
+  margin: 0;
+  background: transparent;
+}
+
+.spice-component-surface {
+  padding: 0.65rem;
+}
+
+.spice-viewer-state {
+  margin: 0.65rem;
+}
