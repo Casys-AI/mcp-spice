@@ -21,6 +21,7 @@ const REQUIRED_ROOTS = [
       "@casys/mcp-view-components": "mod.ts",
       "@casys/mcp-view-components/preact": "preact.ts",
       "@casys/mcp-view-components/preact/components": "preact-components.ts",
+      "@casys/mcp-view-components/fonts": "fonts.ts",
     },
   },
 ] as const;

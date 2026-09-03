@@ -12,6 +12,7 @@ import {
 import { isReceiptViewData } from "../simulation-receipt/src/model.ts";
 import {
   isRecordedAdmittedSpiceContent,
+  type Sha256Fingerprint,
   SPICE_ADMITTED_EXECUTION_CAPTURE_SCHEMA,
   SPICE_ADMITTED_OPERATING_POINT_RESULT_SCHEMA,
 } from "../simulation-result/src/recorded-admitted.ts";
@@ -28,9 +29,9 @@ export interface SpiceRecordedViewSession {
     readonly projectRevision: number;
     readonly subjectId: string;
     readonly thread: { readonly id: string; readonly revision: number };
-    readonly artifact: { readonly id: string; readonly fingerprint: string };
+    readonly artifact: { readonly id: string; readonly fingerprint: Sha256Fingerprint };
   };
-  readonly projectionFingerprint: string;
+  readonly projectionFingerprint: Sha256Fingerprint;
   readonly structuredContent: unknown;
 }
 
@@ -68,7 +69,7 @@ export async function parseSpiceRecordedViewSession(
   value: unknown,
 ): Promise<SpiceRecordedViewSession | undefined> {
   if (!isSpiceRecordedViewSession(view, value)) return undefined;
-  let projectionFingerprint: string;
+  let projectionFingerprint: Sha256Fingerprint;
   try {
     projectionFingerprint = await fingerprintSpiceRecordedProjection({
       schemaVersion: value.schemaVersion,
@@ -103,7 +104,7 @@ export async function parseSpiceRecordedViewSession(
 /** Digest the complete read model, excluding only its own digest field. */
 export async function fingerprintSpiceRecordedProjection(
   value: Omit<SpiceRecordedViewSession, "projectionFingerprint">,
-): Promise<`sha256:${string}`> {
+): Promise<Sha256Fingerprint> {
   const bytes = new TextEncoder().encode(canonicalJson(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hex = Array.from(
@@ -144,7 +145,7 @@ function isAdmittedArtifactSchema(value: string): boolean {
     value === SPICE_ADMITTED_OPERATING_POINT_RESULT_SCHEMA;
 }
 
-async function fingerprintJsonValue(value: unknown): Promise<`sha256:${string}`> {
+async function fingerprintJsonValue(value: unknown): Promise<Sha256Fingerprint> {
   const bytes = new TextEncoder().encode(canonicalJson(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hex = Array.from(
@@ -196,7 +197,7 @@ function isRevision(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-function isSha256Fingerprint(value: unknown): value is string {
+function isSha256Fingerprint(value: unknown): value is Sha256Fingerprint {
   return typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value);
 }
 

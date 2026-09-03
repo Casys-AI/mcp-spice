@@ -14,83 +14,101 @@ import {
   ElementIdent,
   ElementProvenance,
   ElementReading,
+  ElementSection,
   InlineCode,
   KeyValueList,
   SemanticElement,
-  Stack,
 } from "@casys/mcp-view-components/preact/components";
+import type { ComponentChild } from "preact";
 import { SPICE_RECEIPT_COMPONENT } from "../../constants.ts";
-import { formatNumber } from "../../shared/format.ts";
-import type { NormalizedRequest, ReceiptViewData, RuntimeIdentity } from "./model.ts";
+import { type NumberFormats, numberFormats } from "../../shared/format.ts";
+import type {
+  AnalysisKind,
+  NormalizedRequest,
+  ReceiptViewData,
+  RuntimeIdentity,
+  SimulationReceipt,
+} from "./model.ts";
 
 export { SPICE_RECEIPT_COMPONENT };
 export const SPICE_RECEIPT_SURFACE = {
-  layout: { type: "stack", gap: "sm" },
+  // The datasheet surface is one framed sheet; its sections rule themselves apart.
+  layout: { type: "stack", gap: "none" },
   components: [{ id: "receipt", component: SPICE_RECEIPT_COMPONENT }],
 } as const;
 
 type ReceiptProps = PreactSurfaceComponentProps<ReceiptViewData>;
 
-const Receipt = ({ data }: ReceiptProps) => {
-  const failed = data.receipt.execution_state === "failed";
+interface Reading {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+  readonly unit?: string;
+}
+
+interface Fact {
+  readonly id: string;
+  readonly label: string;
+  readonly value: ComponentChild;
+}
+
+const ANALYSIS_LABELS: Record<AnalysisKind, string> = {
+  op: "Operating point",
+  tran: "Transient",
+  dc: "DC sweep",
+};
+
+/**
+ * A receipt reads as a datasheet: what ran and how it ended in the readings strip,
+ * what was asked, on which runtime, and every digest once in its own section.
+ */
+const Receipt = ({ data, context }: ReceiptProps) => {
+  const { receipt } = data;
+  const failed = receipt.execution_state === "failed";
+  const format = numberFormats(context.hostContext.locale);
   return (
     <SemanticElement
       reference={{
         domain: "spice",
         kind: "simulation-receipt",
         id: data.receipt_sha256,
-        basisFingerprint: data.receipt.netlist_sha256,
+        basisFingerprint: receipt.netlist_sha256,
       }}
       density="card"
       tone={failed ? "danger" : "neutral"}
       ident={
         <ElementIdent
-          marker={data.receipt.analysis_kind.toUpperCase()}
+          marker={receipt.analysis_kind.toUpperCase()}
           label="Simulation receipt"
-          detail="Exact documentary provider record"
+          detail={`${
+            ANALYSIS_LABELS[receipt.analysis_kind]
+          } analysis · documentary record`}
         />
       }
-      reading={
+      reading={readings(receipt, format).map((reading) => (
         <ElementReading
-          label="execution_state"
-          value={data.receipt.execution_state}
+          key={reading.id}
+          label={reading.label}
+          value={reading.value}
+          unit={reading.unit}
         />
-      }
+      ))}
       body={
         <ElementBody>
-          <Stack gap="sm">
-            <KeyValueList items={requestItems(data.receipt.normalized_request)} />
-            <KeyValueList items={runtimeItems(data.receipt.runtime_identity)} />
-            <KeyValueList
-              items={[
-                {
-                  id: "request_sha256",
-                  label: "request_sha256",
-                  value: <InlineCode>{data.receipt.request_sha256}</InlineCode>,
-                },
-                {
-                  id: "dispatch_sha256",
-                  label: "dispatch_sha256",
-                  value: <InlineCode>{data.receipt.dispatch_sha256}</InlineCode>,
-                },
-                {
-                  id: "netlist_sha256",
-                  label: "netlist_sha256",
-                  value: <InlineCode>{data.receipt.netlist_sha256}</InlineCode>,
-                },
-                {
-                  id: "outcome_sha256",
-                  label: "outcome_sha256",
-                  value: <InlineCode>{data.receipt.outcome_sha256}</InlineCode>,
-                },
-              ]}
-            />
-          </Stack>
+          <ElementSection title="Request">
+            <Facts items={requestFacts(receipt.normalized_request, format)} />
+          </ElementSection>
+          <ElementSection title="Runtime">
+            <Facts items={runtimeFacts(receipt.runtime_identity)} />
+          </ElementSection>
+          <ElementSection title="Digests">
+            <Facts items={digestFacts(receipt)} />
+          </ElementSection>
         </ElementBody>
       }
       provenance={
         <ElementProvenance
-          label="receipt SHA-256"
+          label="Receipt"
           value={<InlineCode>{data.receipt_sha256}</InlineCode>}
         />
       }
@@ -115,63 +133,81 @@ export const SPICE_RECEIPT_REGISTRY = defineComponentRegistry<
   defaultSurface: defineComponentSurface(SPICE_RECEIPT_SURFACE),
 });
 
-function runtimeItems(identity: RuntimeIdentity) {
-  return [
-    {
-      id: "mcp_spice_version",
-      label: "mcp_spice_version",
-      value: identity.mcp_spice_version,
-    },
-    {
-      id: "execution_budgets",
-      label: "execution_budgets",
-      value: identity.execution_budgets,
-    },
-    { id: "deno_version", label: "deno_version", value: identity.deno_version },
-    { id: "os", label: "os", value: identity.os },
-    { id: "arch", label: "arch", value: identity.arch },
-    {
-      id: "ngspice_version",
-      label: "ngspice_version",
-      value: identity.ngspice_version,
-    },
-    {
-      id: "ngspice_version_sha256",
-      label: "ngspice_version_sha256",
-      value: <InlineCode>{identity.ngspice_version_sha256}</InlineCode>,
-    },
-  ];
-}
-
-function requestItems(request: NormalizedRequest) {
-  const shared = [
-    { id: "nodes", label: "nodes", value: request.nodes.join(", ") || "—" },
-    {
-      id: "branch_sources",
-      label: "branch_sources",
-      value: request.branch_sources.join(", ") || "—",
-    },
-    {
-      id: "timeout_s",
-      label: "timeout_s",
-      value: `${formatNumber(request.timeout_s)} s`,
-    },
-  ];
+/** The terminal state is copied literally; the analysis axis joins it as the headline. */
+function readings(receipt: SimulationReceipt, format: NumberFormats): Reading[] {
+  const request = receipt.normalized_request;
+  const state: Reading = {
+    id: "state",
+    label: "Execution state",
+    value: receipt.execution_state,
+  };
   if (request.kind === "tran") {
     return [
-      { id: "tstep_s", label: "tstep_s", value: `${formatNumber(request.tstep_s)} s` },
-      { id: "tstop_s", label: "tstop_s", value: `${formatNumber(request.tstop_s)} s` },
-      ...shared,
+      state,
+      {
+        id: "tstep",
+        label: "Time step",
+        value: format.number(request.tstep_s),
+        unit: "s",
+      },
+      {
+        id: "tstop",
+        label: "Stop time",
+        value: format.number(request.tstop_s),
+        unit: "s",
+      },
     ];
   }
   if (request.kind === "dc") {
     return [
-      { id: "sweep_source", label: "sweep_source", value: request.sweep_source },
-      { id: "start_v", label: "start_v", value: `${formatNumber(request.start_v)} V` },
-      { id: "stop_v", label: "stop_v", value: `${formatNumber(request.stop_v)} V` },
-      { id: "step_v", label: "step_v", value: `${formatNumber(request.step_v)} V` },
-      ...shared,
+      state,
+      { id: "source", label: "Swept source", value: request.sweep_source },
+      { id: "start", label: "Start", value: format.number(request.start_v), unit: "V" },
+      { id: "stop", label: "Stop", value: format.number(request.stop_v), unit: "V" },
+      { id: "step", label: "Step", value: format.number(request.step_v), unit: "V" },
     ];
   }
-  return shared;
+  return [state];
 }
+
+function requestFacts(request: NormalizedRequest, format: NumberFormats): Fact[] {
+  return [
+    { id: "nodes", label: "Nodes", value: request.nodes.join(", ") || "—" },
+    {
+      id: "branch-sources",
+      label: "Branch sources",
+      value: request.branch_sources.join(", ") || "—",
+    },
+    { id: "timeout", label: "Timeout", value: `${format.number(request.timeout_s)} s` },
+  ];
+}
+
+function runtimeFacts(identity: RuntimeIdentity): Fact[] {
+  return [
+    { id: "mcp-spice", label: "mcp-spice", value: identity.mcp_spice_version },
+    { id: "engine", label: "Engine", value: identity.ngspice_version },
+    { id: "deno", label: "Deno", value: identity.deno_version },
+    { id: "platform", label: "Platform", value: `${identity.os} / ${identity.arch}` },
+    { id: "budgets", label: "Execution budgets", value: identity.execution_budgets },
+  ];
+}
+
+function digestFacts(receipt: SimulationReceipt): Fact[] {
+  return [
+    { id: "request", label: "Request", value: digest(receipt.request_sha256) },
+    { id: "dispatch", label: "Dispatch", value: digest(receipt.dispatch_sha256) },
+    { id: "netlist", label: "Netlist", value: digest(receipt.netlist_sha256) },
+    { id: "outcome", label: "Outcome", value: digest(receipt.outcome_sha256) },
+    {
+      id: "engine",
+      label: "Engine",
+      value: digest(receipt.runtime_identity.ngspice_version_sha256),
+    },
+  ];
+}
+
+const Facts = ({ items }: { readonly items: readonly Fact[] }) => (
+  <KeyValueList layout="facts" items={items} />
+);
+
+const digest = (value: string): ComponentChild => <InlineCode>{value}</InlineCode>;

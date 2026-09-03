@@ -6,9 +6,34 @@ All notable changes to this project will be documented in this file. Format:
 
 ## [Unreleased]
 
+### Changed
+
+- The five MCP Apps run on the `@casys/mcp-view-components` surface-app lifecycle
+  (`startPreactSurfaceApp` with `viewerSession`) instead of a hand-rolled
+  `start-surface-app.ts`; a refused recorded session is now shown as a coded
+  `session-rejected` status instead of being dropped — including a projection that
+  throws after the gate accepted its envelope. Every figure follows the host's declared
+  locale (`hostContext.locale`) and falls back to `en`, never to the viewing machine's
+  locale; the UI suite runs under `LC_ALL=de_DE.UTF-8` to keep it that way.
+- The result and receipt viewers read as datasheets instead of field dumps. Quantities
+  headline the readings strip when all of them fit (six at most) and are tabled
+  otherwise — a positional subset is never a headline; reduced analyses headline their
+  axis and table extrema with where on the axis each was taken. The body is titled
+  sections of reader-worded facts (`Measurements`, `Sign convention`, `Execution`,
+  `Digests`, `Provenance`, …); the netlist and an admitted artifact each get an
+  `ArtifactRow` carrying their fingerprint; the outcome or projection digest sits in the
+  footer only, never in a section as well. The sign convention of an admitted result is
+  now shown. The receipt headlines its execution state and analysis axis, then
+  `Request`, `Runtime` and `Digests`. The App shells no longer pin `aria-busy` on the
+  root: the kit's loading status owns it.
+
 ### Documentation
 
 - Pin the published 0.6.2 multi-architecture image by its immutable OCI index digest.
+- The README image is reproducible: `deno task docs:viewer-screenshot` replays the
+  registered MCS01 operating-point session (`docs/fixtures/`) through the built bundle
+  in headless Chrome; `tests/viewer_docs_test.ts` keeps the fixture on the App's strict
+  gate.
 
 ## [0.6.2] - 2026-08-31
 

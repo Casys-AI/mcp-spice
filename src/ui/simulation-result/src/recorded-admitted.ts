@@ -23,13 +23,16 @@ export type RecordedAdmittedSpiceSchema =
   | typeof SPICE_ADMITTED_OPERATING_POINT_RESULT_SCHEMA
   | typeof SPICE_ADMITTED_EXECUTION_CAPTURE_SCHEMA;
 
+/** The thread spells every digest it records as `sha256:<hex>`; the session gate checks it. */
+export type Sha256Fingerprint = `sha256:${string}`;
+
 export interface RecordedSpiceArtifactBasis {
   readonly projectId: string;
   readonly projectRevision: number;
   readonly subjectId: string;
   readonly thread: { readonly id: string; readonly revision: number };
-  readonly artifact: { readonly id: string; readonly fingerprint: string };
-  readonly projectionFingerprint: string;
+  readonly artifact: { readonly id: string; readonly fingerprint: Sha256Fingerprint };
+  readonly projectionFingerprint: Sha256Fingerprint;
 }
 
 export interface AdmittedSpiceObservable {

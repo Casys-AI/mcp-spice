@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "io.casys.mcp-spice.recorded-operating-point-session/1.0",
+  "resourceUri": "ui://mcp-spice/operating-point",
+  "resultSchema": "spice-operating-point-result/1.0",
+  "readOnly": true,
+  "basis": {
+    "projectId": "motorized-camera-slider-mcs01",
+    "projectRevision": 150,
+    "subjectId": "project:motorized-camera-slider-mcs01",
+    "thread": {
+      "id": "project:motorized-camera-slider-mcs01:r21:decide-accept-admitted-spice-evaluation-run:queue-mcs01-spice-closeout-r146",
+      "revision": 21
+    },
+    "artifact": {
+      "id": "spice-admitted-result-3a789bd0d0c8c9a291c6b309574a183b9ce49c144916f3e363be4af167d9843b",
+      "fingerprint": "sha256:3a789bd0d0c8c9a291c6b309574a183b9ce49c144916f3e363be4af167d9843b"
+    }
+  },
+  "structuredContent": {
+    "analysisKind": "operating-point",
+    "observables": [
+      {
+        "kind": "branch-current",
+        "nativeName": "@lphase[i]",
+        "sourceSymbol": "LPHASE",
+        "unit": "A",
+        "value": 1.92
+      },
+      {
+        "kind": "branch-current",
+        "nativeName": "@rphase[i]",
+        "sourceSymbol": "RPHASE",
+        "unit": "A",
+        "value": 1.92
+      },
+      {
+        "kind": "branch-current",
+        "nativeName": "i(vsup)",
+        "sourceSymbol": "VSUP",
+        "unit": "A",
+        "value": -1.92
+      },
+      {
+        "kind": "node-voltage",
+        "nativeName": "v(phase)",
+        "sourceSymbol": "phase",
+        "unit": "V",
+        "value": 8.881784e-16
+      },
+      {
+        "kind": "node-voltage",
+        "nativeName": "v(supply)",
+        "sourceSymbol": "supply",
+        "unit": "V",
+        "value": 24
+      }
+    ],
+    "schemaVersion": "spice-operating-point-result/1.0",
+    "signConvention": {
+      "kind": "ngspice-native",
+      "passiveCurrent": "positive-from-first-named-node-to-second",
+      "voltageSourceBranchCurrent": "positive-into-positive-terminal"
+    }
+  },
+  "projectionFingerprint": "sha256:b05af9cfa5b3ea7d8b5fd69b7b274f3eeaa9006c3c03a124cee02a38234f87e1"
+}
