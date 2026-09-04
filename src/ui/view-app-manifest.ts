@@ -11,10 +11,14 @@ import {
   SPICE_VIEW_APP_TITLE,
   SPICE_VIEW_APP_VERSION,
 } from "./constants.ts";
+import {
+  VIEW_APP_MANIFEST_SCHEMA,
+  VIEWER_SESSION_APPLY_ACTION,
+} from "@casys/mcp-view-contracts";
 
-export const SPICE_VIEW_APP_MANIFEST_SCHEMA =
-  "io.casys.mcp.view-app-manifest/1.0" as const;
-export const SPICE_VIEWER_SESSION_ACTION = "viewer.session.apply" as const;
+/** Re-exported from the shared contract so the value has a single source. */
+export const SPICE_VIEW_APP_MANIFEST_SCHEMA = VIEW_APP_MANIFEST_SCHEMA;
+export const SPICE_VIEWER_SESSION_ACTION = VIEWER_SESSION_APPLY_ACTION;
 
 export const SPICE_RECORDED_SESSION_SCHEMA_IDS = {
   operatingPoint: "io.casys.mcp-spice.recorded-operating-point-session/1.0",

@@ -51,4 +51,8 @@ export const SPICE_VIEW_APP_VERSION = "0.6.2";
 export const SPICE_RESULT_COMPONENT = "spice.simulation-result";
 export const SPICE_RECEIPT_COMPONENT = "spice.simulation-receipt";
 
-export const COMPACT_READING_LIMIT = 3;
+/**
+ * Most quantities the card's readings strip holds. A result with more of them
+ * tables every quantity in the body instead: a positional subset is not a headline.
+ */
+export const READING_STRIP_LIMIT = 6;

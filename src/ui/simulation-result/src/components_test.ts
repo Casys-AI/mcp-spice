@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import {
   advertisedComponentCatalog,
   mountComponentSurface,
@@ -36,9 +36,14 @@ const liveOp = parseSimulationViewData({
   },
 });
 
-const componentContext = {} as unknown as PreactSurfaceContext<
-  SimulationViewData
->;
+type HostContext = PreactSurfaceContext<SimulationViewData>["hostContext"];
+
+/** The App context the kit hands components: only the host context matters here. */
+function componentContext(
+  hostContext: HostContext,
+): PreactSurfaceContext<SimulationViewData> {
+  return { hostContext } as unknown as PreactSurfaceContext<SimulationViewData>;
+}
 
 Deno.test("result registry exposes one mono-object component", () => {
   const advertised = advertisedComponentCatalog(SPICE_COMPONENT_REGISTRY);
@@ -47,25 +52,277 @@ Deno.test("result registry exposes one mono-object component", () => {
   assertEquals(SPICE_RESULT_SURFACE.components.length, 1);
 });
 
-Deno.test("mono-object result includes readings, limits, and exact provenance", async () => {
+Deno.test("the live operating point reads as a datasheet, not as a field dump", async () => {
   await withMounted(liveOp, (root) => {
     const text = root.textContent ?? "";
     for (
       const expected of [
         "Operating point",
-        "node_voltages.in",
-        "branch_currents_a.Vin",
+        "Node voltage",
+        "Branch current",
+        "Measurements",
+        "Not checked",
         "Temperature remains outside this analysis.",
-        "request_sha256",
-        "receipt_sha256",
+        "Provenance",
+        "87 bytes",
         "succeeded",
+        "documentary only",
       ]
     ) assert(text.includes(expected), expected);
+    // Reader-worded labels: the JSON field names stay in the JSON.
+    for (
+      const raw of [
+        "node_voltages",
+        "branch_currents_a",
+        "request_sha256",
+        "documentary_only",
+        "not_checked",
+      ]
+    ) assertEquals(text.includes(raw), false, raw);
     assertEquals(root.querySelectorAll(".mcp-view-semantic-element").length, 1);
     assertEquals(root.querySelector(".mcp-view-card"), null);
+    // Three quantities fit the strip, so none is tabled.
+    assertEquals(root.querySelectorAll(".mcp-view-element-reading").length, 3);
+    assertEquals(root.querySelector(".mcp-view-table"), null);
+    assertEquals(
+      sectionTitles(root),
+      ["Measurements", "Provenance"],
+    );
+    // One figure, one place: the outcome digest sits in the footer only.
+    assertEquals(text.split("e".repeat(64)).length - 1, 1);
+    assertStringIncludes(
+      root.querySelector(".mcp-view-element-provenance")?.textContent ?? "",
+      "e".repeat(64),
+    );
+    assertEquals(root.querySelectorAll(".mcp-view-artifact-row").length, 1);
     assertEquals(text.toLowerCase().includes("pass"), false);
     assertEquals(text.toLowerCase().includes("proof"), false);
     assertEquals(text.toLowerCase().includes("compliance"), false);
+  });
+});
+
+Deno.test("more quantities than the strip holds are tabled; none is headlined", async () => {
+  const OUTCOME = "9".repeat(64);
+  const wide = parseSimulationViewData({
+    outcome_sha256: OUTCOME,
+    result: {
+      node_voltages: Object.fromEntries(
+        Array.from({ length: 7 }, (_, index) => [`n${index}`, index / 10]),
+      ),
+      branch_currents_a: {},
+      measurements: {},
+      not_checked: [],
+      input_artifact: { sha256: NETLIST, bytes: 87 },
+    },
+  });
+  await withMounted(wide, (root) => {
+    const text = root.textContent ?? "";
+    assertEquals(root.querySelectorAll(".mcp-view-element-reading").length, 0);
+    assertEquals(sectionTitles(root), ["Quantities", "Provenance"]);
+    assertEquals(root.querySelectorAll(".mcp-view-table tbody tr").length, 7);
+    // No path: the content address is the netlist's only name, shown once.
+    assertEquals(text.split(NETLIST).length - 1, 1);
+    assertEquals(text.split(OUTCOME).length - 1, 1);
+  });
+});
+
+Deno.test("reduced analyses headline their axis and table extrema with where each was taken", async () => {
+  const sweep = parseSimulationViewData({
+    node_stats: {
+      out: {
+        min_v: 0,
+        max_v: 4.5,
+        final_v: 4.5,
+        min_at_source_v: 0,
+        max_at_source_v: 5,
+        final_at_source_v: 5,
+      },
+    },
+    branch_current_stats_a: {
+      Vin: {
+        min_a: -0.002,
+        max_a: 0,
+        final_a: -0.002,
+        min_at_source_v: 5,
+        max_at_source_v: 0,
+        final_at_source_v: 5,
+      },
+    },
+    measurements: {},
+    not_checked: [],
+    sweep: {
+      source: "Vin",
+      start_v: 0,
+      stop_v: 5,
+      step_v: 0.5,
+      n_points: 11,
+      max_points: 1000,
+    },
+    input_artifact: {
+      sha256: NETLIST,
+      bytes: 87,
+      source_path: `/ngspice-runs/inputs/${NETLIST}`,
+    },
+    documentary_receipt: {
+      request_sha256: "b".repeat(64),
+      dispatch_sha256: "c".repeat(64),
+      receipt_sha256: "d".repeat(64),
+      outcome_sha256: "e".repeat(64),
+      execution_state: "succeeded",
+      documentary_only: true,
+    },
+  });
+  await withMounted(sweep, (root) => {
+    const text = root.textContent ?? "";
+    assertStringIncludes(text, "DC sweep");
+    // The whole axis is the strip; the quantities never compete with it.
+    assertEquals(readingValues(root), ["Vin", "0", "5", "0.5", "11"]);
+    assertStringIncludes(text, "of 1,000 allowed");
+    assertEquals(root.querySelectorAll(".mcp-view-table tbody tr").length, 2);
+    // Every extremum says where on the axis it was taken, voltages before currents.
+    assertEquals(
+      Array.from(root.querySelectorAll(".spice-figure-at"), (at) => at.textContent),
+      ["at 0 V", "at 5 V", "at 5 V", "at 5 V", "at 0 V", "at 5 V"],
+    );
+  });
+
+  const transient = parseSimulationViewData({
+    outcome_sha256: "9".repeat(64),
+    result: {
+      node_stats: {
+        out: {
+          min_v: -1,
+          max_v: 1,
+          final_v: 0.25,
+          min_at_s: 0.0015,
+          max_at_s: 0.0005,
+          final_at_s: 0.002,
+        },
+      },
+      branch_current_stats_a: {},
+      measurements: {},
+      not_checked: [],
+      simulation: { n_points: 2001, tstop_s: 0.002 },
+      input_artifact: { sha256: NETLIST, bytes: 87 },
+    },
+  });
+  await withMounted(transient, (root) => {
+    assertStringIncludes(root.textContent ?? "", "Reduced transient result");
+    assertEquals(readingValues(root), ["2,001", "0.002"]);
+    assertEquals(
+      Array.from(root.querySelectorAll(".spice-figure-at"), (at) => at.textContent),
+      ["at 0.0015 s", "at 0.0005 s", "at 0.002 s"],
+    );
+  }, { locale: "en-US" });
+});
+
+Deno.test("readings follow the host locale, not the viewing machine", async () => {
+  await withMounted(liveOp, (root) => {
+    assert(readingValues(root).includes("-0.001"), readingValues(root).join(","));
+  }, { locale: "en-US" });
+  await withMounted(liveOp, (root) => {
+    assert(readingValues(root).includes("-0,001"), readingValues(root).join(","));
+  }, { locale: "de-DE" });
+});
+
+Deno.test("the admitted result names its record once and its projection once", async () => {
+  const artifactDigest = "f".repeat(64);
+  const projectionDigest = "0".repeat(64);
+  const admitted = parseRecordedAdmittedSpiceView(
+    SPICE_ADMITTED_OPERATING_POINT_RESULT_SCHEMA,
+    {
+      schemaVersion: SPICE_ADMITTED_OPERATING_POINT_RESULT_SCHEMA,
+      analysisKind: "operating-point",
+      signConvention: {
+        kind: "ngspice-native",
+        voltageSourceBranchCurrent: "positive-into-positive-terminal",
+        passiveCurrent: "positive-from-first-named-node-to-second",
+      },
+      observables: [
+        {
+          nativeName: "i(vin)",
+          kind: "branch-current",
+          sourceSymbol: "Vin",
+          value: -0.001,
+          unit: "A",
+        },
+        {
+          nativeName: "v(out)",
+          kind: "node-voltage",
+          sourceSymbol: "out",
+          value: 2,
+          unit: "V",
+        },
+      ],
+    },
+    {
+      projectId: "project-one",
+      projectRevision: 7,
+      subjectId: "subject-one",
+      thread: { id: "thread-one", revision: 3 },
+      artifact: {
+        id: `spice-admitted-result-${artifactDigest}`,
+        fingerprint: `sha256:${artifactDigest}`,
+      },
+      projectionFingerprint: `sha256:${projectionDigest}`,
+    },
+  );
+  await withMounted(admitted, (root) => {
+    const text = root.textContent ?? "";
+    assertStringIncludes(text, "Admitted operating point");
+    assertStringIncludes(text, "Recorded by project-one r7");
+    assertStringIncludes(text, "Branch current · Vin");
+    assertEquals(root.querySelectorAll(".mcp-view-element-reading").length, 2);
+    assertEquals(sectionTitles(root), ["Sign convention", "Provenance"]);
+    // The artifact row carries the record's digest; the footer carries the projection's.
+    assertEquals(
+      text.split(artifactDigest).length - 1,
+      2,
+      "artifact id and its fingerprint",
+    );
+    assertEquals(
+      root.querySelector(".mcp-view-artifact-row-fingerprint code")?.textContent,
+      artifactDigest,
+    );
+    assertEquals(
+      root.querySelector(".mcp-view-element-provenance code")?.textContent,
+      `sha256:${projectionDigest}`,
+    );
+    // Semantic references carry the bare digest the composition contract validates.
+    assertEquals(
+      root.querySelector("[data-basis-fingerprint]")?.getAttribute(
+        "data-basis-fingerprint",
+      ),
+      artifactDigest,
+    );
+    assertEquals(text.split(projectionDigest).length - 1, 1);
+  });
+});
+
+Deno.test("a typed failure keeps its recovery first and shows only what it has", async () => {
+  const failed = parseSimulationViewData({
+    outcome_sha256: "9".repeat(64),
+    result: {
+      code: "SPICE_CONVERGENCE_FAILED",
+      context: { iterations: 100, node: "out" },
+      recovery: "Add a .nodeset for node out and rerun.",
+    },
+  });
+  await withMounted(failed, (root) => {
+    const element = root.querySelector(".mcp-view-semantic-element");
+    assertEquals(element?.getAttribute("data-tone"), "danger");
+    assertEquals(root.querySelectorAll(".mcp-view-element-reading").length, 0);
+    assertStringIncludes(
+      root.textContent ?? "",
+      "Add a .nodeset for node out and rerun.",
+    );
+    assertEquals(sectionTitles(root), ["Context"]);
+    assertStringIncludes(root.textContent ?? "", "iterations");
+    assertEquals(root.querySelector(".mcp-view-artifact-row"), null);
+    assertStringIncludes(
+      root.querySelector(".mcp-view-element-provenance")?.textContent ?? "",
+      "9".repeat(64),
+    );
   });
 });
 
@@ -119,6 +376,7 @@ Deno.test("exact admitted result adapter preserves its own schema and artifact b
 async function withMounted(
   data: SimulationViewData,
   run: (root: HTMLElement) => void | Promise<void>,
+  hostContext: HostContext = {},
 ): Promise<void> {
   const { parseHTML } = await import("linkedom");
   const dom = parseHTML("<html><body><div id=root></div></body></html>");
@@ -133,8 +391,8 @@ async function withMounted(
       root,
       registry: SPICE_COMPONENT_REGISTRY,
       data,
-      appContext: componentContext,
-      hostContext: {} as PreactSurfaceContext<SimulationViewData>["hostContext"],
+      appContext: componentContext(hostContext),
+      hostContext,
     });
     try {
       await run(root);
@@ -147,4 +405,18 @@ async function withMounted(
       value: previousDocument,
     });
   }
+}
+
+function sectionTitles(root: HTMLElement): string[] {
+  return Array.from(
+    root.querySelectorAll(".mcp-view-element-section-title"),
+    (title) => title.textContent ?? "",
+  );
+}
+
+function readingValues(root: HTMLElement): string[] {
+  return Array.from(
+    root.querySelectorAll(".mcp-view-element-reading-value"),
+    (value) => value.textContent ?? "",
+  );
 }

@@ -34,7 +34,12 @@ Edit the TSX or shared viewer modules, then rebuild the actual served resources:
 deno task build:ui
 deno task test:ui
 deno task check:ui:bundle
+deno task docs:viewer-screenshot   # only after a visible viewer change
 ```
+
+The last task regenerates the README image from the committed MCS01 session fixture;
+[viewers.md](viewers.md#screenshot-provenance) documents the harness and the capture
+geometry. Commit the regenerated PNG with the viewer change it illustrates.
 
 The provider manifest is generated from the same App constants and committed at
 `src/ui/view-app-manifest.json`. Do not hand-edit a generated bundle or substitute a

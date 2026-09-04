@@ -1,22 +1,4 @@
+import { bootSpiceApp } from "../../shared/surface-app.ts";
 import { startSpiceReceiptApp } from "./app.ts";
 
-const root = document.getElementById("root");
-if (!root) throw new Error("The SPICE receipt viewer root is missing.");
-
-void startSpiceReceiptApp(root).catch((error) => {
-  const state = document.createElement("div");
-  state.className = "mcp-view-state";
-  state.dataset.tone = "danger";
-  state.setAttribute("role", "alert");
-  const title = document.createElement("strong");
-  title.textContent = "SPICE receipt viewer unavailable";
-  const detail = document.createElement("div");
-  detail.className = "mcp-view-state-detail";
-  detail.textContent = error instanceof Error
-    ? error.message
-    : "The viewer could not start.";
-  state.append(title, detail);
-  root.replaceChildren(state);
-  root.setAttribute("aria-busy", "false");
-  console.error(error);
-});
+bootSpiceApp("SPICE receipt viewer unavailable", startSpiceReceiptApp);

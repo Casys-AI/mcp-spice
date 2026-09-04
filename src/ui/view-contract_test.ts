@@ -2,9 +2,19 @@ import { assertEquals } from "@std/assert";
 import { defineViewAppManifest } from "@casys/mcp-view-contracts";
 import {
   SPICE_VIEW_APP_MANIFEST,
+  SPICE_VIEW_CONTRACTS,
   SPICE_VIEWER_SESSION_ACTION,
+  type SpiceViewKey,
 } from "./view-app-manifest.ts";
 import { isSpiceRecordedViewSession } from "./shared/recorded-session.ts";
+import { SESSION_REJECTED_CODE } from "./shared/surface-app.ts";
+import type { SurfaceHostAccess } from "@casys/mcp-view-components/preact";
+import { spiceReceiptAppOptions } from "./simulation-receipt/src/app.ts";
+import { spiceResultsAppOptions } from "./simulation-result/src/app.ts";
+
+const SPICE_VIEW_KEYS = Object.keys(SPICE_VIEW_CONTRACTS) as SpiceViewKey[];
+const root = {} as HTMLElement;
+const host = {} as SurfaceHostAccess;
 
 Deno.test("serialized View App manifest is the exact provider-owned contract", async () => {
   defineViewAppManifest(SPICE_VIEW_APP_MANIFEST);
@@ -42,10 +52,14 @@ Deno.test("App-level receivers reject non-session input before connect", async (
   assertEquals(isSpiceRecordedViewSession("transientResult", []), false);
   assertEquals(isSpiceRecordedViewSession("simulationOutcome", false), false);
   assertEquals(isSpiceRecordedViewSession("simulationReceipt", "invalid"), false);
-  const source = await Deno.readTextFile(
-    new URL("./shared/start-surface-app.ts", import.meta.url),
-  );
-  assertEquals(source.includes("viewerSession:"), true);
-  assertEquals(source.includes("validate: validateSession"), true);
-  assertEquals(source.includes("mapSessionToData"), true);
+  // Each App projects a recorded session through this gate; the projection
+  // itself is exercised in shared/surface-app_test.ts.
+  for (const view of SPICE_VIEW_KEYS) {
+    const options = view === "simulationReceipt"
+      ? spiceReceiptAppOptions(root)
+      : spiceResultsAppOptions(root, view);
+    const state = await options.viewerSession!.toState({}, host);
+    assertEquals(state.kind, "error");
+    if (state.kind === "error") assertEquals(state.code, SESSION_REJECTED_CODE);
+  }
 });

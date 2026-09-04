@@ -4,10 +4,23 @@ body {
   background: transparent;
 }
 
+/* The kit frames the surface; the viewer only keeps it off the iframe edge. */
 .spice-component-surface {
-  padding: 0.65rem;
+  padding: 8px;
 }
 
 .spice-viewer-state {
-  margin: 0.65rem;
+  margin: 8px;
+}
+
+/* A tabled figure reads as one number; where on the axis it was taken sits under it. */
+.spice-figure {
+  display: inline-grid;
+  justify-items: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.spice-figure-at {
+  color: var(--mcp-view-quiet);
+  font-size: var(--mcp-view-size-micro);
 }

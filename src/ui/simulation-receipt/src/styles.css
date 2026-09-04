@@ -4,10 +4,11 @@ body {
   background: transparent;
 }
 
+/* The kit frames the surface; the viewer only keeps it off the iframe edge. */
 .spice-component-surface {
-  padding: 0.65rem;
+  padding: 8px;
 }
 
 .spice-viewer-state {
-  margin: 0.65rem;
+  margin: 8px;
 }
