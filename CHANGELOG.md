@@ -27,6 +27,11 @@ All notable changes to this project will be documented in this file. Format:
   `Request`, `Runtime` and `Digests`. The App shells no longer pin `aria-busy` on the
   root: the kit's loading status owns it.
 
+- The five viewer bundles are rebuilt on `@casys/mcp-view@0.9.3` +
+  `@casys/mcp-view-components@0.7.0` (`Casys-AI/mcp-server@59eeb37`). The only behaviour
+  change is the kit's: a complete `tool-input`, not only a partial one, returns the App
+  to `loading`.
+
 ### Documentation
 
 - Pin the published 0.6.2 multi-architecture image by its immutable OCI index digest.
