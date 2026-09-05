@@ -1,9 +1,16 @@
 import { join, resolve, toFileUrl } from "@std/path";
 
+/** Exact audited kit this viewer build is allowed to consume. */
+export const AUDITED_KIT_REVISION = "b08802df353bb25d25a1c8d64b22ea61b5287ae0";
+export const AUDITED_VIEW_VERSION = "0.9.3";
+export const AUDITED_VIEW_CONTRACTS_VERSION = "0.1.0";
+export const AUDITED_VIEW_COMPONENTS_VERSION = "0.9.0";
+
 const REQUIRED_ROOTS = [
   {
     environment: "MCP_VIEW_LOCAL_ROOT",
     packageName: "@casys/mcp-view",
+    version: AUDITED_VIEW_VERSION,
     entries: {
       "@casys/mcp-view": "mod.ts",
       "@casys/mcp-view/contracts": "contracts.ts",
@@ -12,11 +19,13 @@ const REQUIRED_ROOTS = [
   {
     environment: "MCP_VIEW_CONTRACTS_LOCAL_ROOT",
     packageName: "@casys/mcp-view-contracts",
+    version: AUDITED_VIEW_CONTRACTS_VERSION,
     entries: { "@casys/mcp-view-contracts": "mod.ts" },
   },
   {
     environment: "MCP_VIEW_COMPONENTS_LOCAL_ROOT",
     packageName: "@casys/mcp-view-components",
+    version: AUDITED_VIEW_COMPONENTS_VERSION,
     entries: {
       "@casys/mcp-view-components": "mod.ts",
       "@casys/mcp-view-components/preact": "preact.ts",
@@ -45,7 +54,9 @@ export async function auditedViewerDenoConfig(): Promise<unknown> {
       root,
       requirement.environment,
       requirement.packageName,
+      requirement.version,
     );
+    await assertKitRevision(root, requirement.environment);
     for (
       const [specifier, relativeEntry] of Object.entries(requirement.entries)
     ) {
@@ -118,6 +129,7 @@ async function assertPackageIdentity(
   root: string,
   environment: string,
   expectedName: string,
+  expectedVersion: string,
 ): Promise<void> {
   const metadataPath = join(root, "deno.json");
   await assertRegularFile(metadataPath, `${environment} package metadata`);
@@ -133,11 +145,42 @@ async function assertPackageIdentity(
   }
   if (
     typeof metadata !== "object" || metadata === null ||
-    Array.isArray(metadata) ||
-    (metadata as Record<string, unknown>).name !== expectedName
+    Array.isArray(metadata)
   ) {
     throw new Error(
-      `${environment} must identify the split package ${expectedName}.`,
+      `${environment} must identify the split package ${expectedName}@${expectedVersion}.`,
+    );
+  }
+  const record = metadata as Record<string, unknown>;
+  if (record.name !== expectedName || record.version !== expectedVersion) {
+    throw new Error(
+      `${environment} must identify the split package ${expectedName}@${expectedVersion}.`,
+    );
+  }
+}
+
+async function assertKitRevision(
+  root: string,
+  environment: string,
+): Promise<void> {
+  const command = new Deno.Command("git", {
+    args: ["-C", root, "rev-parse", "HEAD"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const result = await command.output();
+  const decoder = new TextDecoder();
+  if (!result.success) {
+    throw new Error(
+      `${environment} must be a git checkout of ${AUDITED_KIT_REVISION}: ${
+        decoder.decode(result.stderr).trim() || "git rev-parse failed"
+      }`,
+    );
+  }
+  const head = decoder.decode(result.stdout).trim();
+  if (head !== AUDITED_KIT_REVISION) {
+    throw new Error(
+      `${environment} must be ${AUDITED_KIT_REVISION}, got ${head}.`,
     );
   }
 }

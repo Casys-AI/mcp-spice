@@ -23,3 +23,22 @@ Deno.test("figures keep at most six fractional digits", () => {
   assertEquals(numberFormats("en-US").number(0.1234567891), "0.123457");
   assertEquals(numberFormats("en-US").number(24), "24");
 });
+
+Deno.test("invalid locale falls back to English; valid fr-CA stays with Intl", () => {
+  const english = numberFormats("en").number(1234.5);
+  const canadian = numberFormats("fr-CA").number(1234.5);
+  const french = numberFormats("fr").number(1234.5);
+  assertEquals(english, "1,234.5");
+  assertEquals(
+    canadian,
+    new Intl.NumberFormat("fr-CA", { maximumFractionDigits: 6 }).format(1234.5),
+  );
+  assertEquals(
+    french,
+    new Intl.NumberFormat("fr", { maximumFractionDigits: 6 }).format(1234.5),
+  );
+  assertEquals(canadian === english, false);
+  assertEquals(canadian === french, false);
+  assertEquals(numberFormats("not a locale").number(1234.5), english);
+  assertEquals(numberFormats("not a locale").integer(12345.6), "12,346");
+});

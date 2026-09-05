@@ -1,3 +1,4 @@
+import { mcpViewMessages } from "@casys/mcp-view-components";
 import {
   type PreactSurfaceAppOptions,
   startPreactSurfaceApp,
@@ -5,6 +6,7 @@ import {
 } from "@casys/mcp-view-components/preact";
 import { installMcpViewFonts } from "@casys/mcp-view-components/fonts";
 import { SPICE_VIEW_APP_ID, SPICE_VIEW_APP_VERSION } from "../../constants.ts";
+import { spiceMessages } from "../../shared/i18n.ts";
 import type { SpiceRecordedViewSession } from "../../shared/recorded-session.ts";
 import {
   bootSpiceApp,
@@ -64,8 +66,11 @@ export function spiceResultsAppOptions(
     strict: true,
     surfaceClassName: SPICE_SURFACE_CLASS,
     statusClassName: SPICE_STATUS_CLASS,
-    loadingLabel: "Receiving a SPICE simulation result…",
-    emptyLabel: "SPICE returned no supported simulation projection.",
+    messages: mcpViewMessages,
+    loadingLabel: (locale) => spiceMessages(locale)("loadingResult"),
+    emptyLabel: (locale) => spiceMessages(locale)("emptyResult"),
+    documentLanguage: spiceMessages.locale,
+    themeUpdates: "in-place",
     fromToolResult: (value) => displayStateFromToolResultForView(view, value),
     viewerSession: recordedSessionProjection(
       view,

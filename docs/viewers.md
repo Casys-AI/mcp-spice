@@ -25,6 +25,21 @@ request raw curves or manufacture absent samples.
 `succeeded` remains a provider execution state. The viewer never turns it into pass,
 proof, compliance, or requirement satisfaction.
 
+Interface wording (labels, headings, empty/loading copy, accessible names) follows
+`hostContext.locale` in English and French. Domain and contract data are not translated:
+execution states, error codes, identifiers, hashes, units, analysis values, paths,
+`not_checked` content, and tool-returned messages stay as recorded.
+
+On a result or receipt, the useful readings and any failure/unavailable state stay
+visible. Request, runtime, digests and provenance sit under a closed native disclosure.
+Each digest or quantity appears in one place. An admitted recorded operating point keeps
+that documentary status and its measurements visible, uses the short `Recorded session`
+subtitle, and places project id, project revision and the projection SHA-256 in the
+closed disclosure rather than a projection footer.
+
+`<html lang>` follows the provider dictionary selected for the host locale (`en` or
+`fr`), including parent-language fallback from tags such as `fr-CA`.
+
 ## Read-only recorded sessions
 
 Every resource admits exactly one versioned `viewer.session.apply` schema. A recording

@@ -1,9 +1,15 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
-import type { SurfaceHostAccess } from "@casys/mcp-view-components/preact";
+import { assertEquals, assertStrictEquals, assertStringIncludes } from "@std/assert";
+import { mcpViewMessages } from "@casys/mcp-view-components";
+import {
+  startPreactSurfaceApp,
+  type SurfaceHostAccess,
+} from "@casys/mcp-view-components/preact";
 import { spiceReceiptAppOptions } from "../simulation-receipt/src/app.ts";
 import { spiceResultsAppOptions } from "../simulation-result/src/app.ts";
 import { SPICE_VIEW_CONTRACTS } from "../view-app-manifest.ts";
+import { spiceMessages } from "./i18n.ts";
 import { fingerprintSpiceRecordedProjection } from "./recorded-session.ts";
+import { fakeApp, until, withDocument } from "./surface-app-double.ts";
 import { recordedSessionProjection, SESSION_REJECTED_CODE } from "./surface-app.ts";
 
 /** The README fixture: an admitted MCS01 result, recorded by the thread. */
@@ -91,9 +97,11 @@ Deno.test("every session payload reaches the strict gate; a refusal is shown, no
   assertEquals(rejected.kind, "error");
   if (rejected.kind !== "error") return;
   assertEquals(rejected.code, SESSION_REJECTED_CODE);
-  assertEquals(rejected.title, "Session rejected");
+  assertEquals(typeof rejected.title, "function");
+  assertEquals(typeof rejected.message, "function");
+  assertEquals(resolveLabel(rejected.title, "en"), "Session rejected");
   assertStringIncludes(
-    rejected.message,
+    resolveLabel(rejected.message, "en"),
     SPICE_VIEW_CONTRACTS.operatingPoint.sessionSchema,
   );
 });
@@ -178,7 +186,8 @@ Deno.test("a mapper that throws on an accepted envelope is shown as a session re
   assertEquals(state.kind, "error");
   if (state.kind !== "error") return;
   assertEquals(state.code, SESSION_REJECTED_CODE);
-  assertStringIncludes(state.message, "mapper exploded");
+  assertStringIncludes(resolveLabel(state.message, "en"), "mapper exploded");
+  assertStringIncludes(resolveLabel(state.message, "fr"), "mapper exploded");
 });
 
 Deno.test("a session addressed to another view is refused by this App", async () => {
@@ -186,7 +195,10 @@ Deno.test("a session addressed to another view is refused by this App", async ()
   const state = await viewerSession!.toState(await recordedOperatingPoint(), host);
   assertEquals(state.kind, "error");
   if (state.kind !== "error") return;
-  assertStringIncludes(state.message, SPICE_VIEW_CONTRACTS.dcSweep.sessionSchema);
+  assertStringIncludes(
+    resolveLabel(state.message, "en"),
+    SPICE_VIEW_CONTRACTS.dcSweep.sessionSchema,
+  );
 });
 
 Deno.test("both Apps share the viewer-owned surface and status classes", () => {
@@ -199,4 +211,167 @@ Deno.test("both Apps share the viewer-owned surface and status classes", () => {
   assertEquals(results.strict, true);
   assertEquals(receipt.strict, true);
   assertEquals(receipt.info.name.endsWith(".receipt"), true);
+  assertEquals(results.themeUpdates, "in-place");
+  assertEquals(receipt.themeUpdates, "in-place");
+  assertEquals(results.messages, mcpViewMessages);
+  assertEquals(receipt.messages, mcpViewMessages);
+  assertEquals(results.documentLanguage, spiceMessages.locale);
+  assertEquals(receipt.documentLanguage, spiceMessages.locale);
+  assertEquals(typeof results.loadingLabel, "function");
+  assertEquals(typeof receipt.loadingLabel, "function");
+  const loading = results.loadingLabel as (locale?: string) => string;
+  assertEquals(loading("en"), spiceMessages("en")("loadingResult"));
+  assertEquals(loading("fr"), spiceMessages("fr")("loadingResult"));
+  const empty = receipt.emptyLabel as (locale?: string) => string;
+  assertEquals(empty("fr"), spiceMessages("fr")("emptyReceipt"));
 });
+
+Deno.test("a refused session retranslates from callbacks without repeating parse I/O", async () => {
+  const { viewerSession } = spiceResultsAppOptions(root, "operatingPoint");
+  let projections = 0;
+  const original = viewerSession!;
+  const wrapped = {
+    validate: original.validate,
+    toState: (value: unknown, access: SurfaceHostAccess) => {
+      projections += 1;
+      return original.toState(value, access);
+    },
+  };
+  const rejected = await wrapped.toState({}, host);
+  assertEquals(projections, 1);
+  assertEquals(rejected.kind, "error");
+  if (rejected.kind !== "error") return;
+  assertEquals(typeof rejected.title, "function");
+  assertEquals(typeof rejected.message, "function");
+  assertEquals(resolveLabel(rejected.title, "en"), "Session rejected");
+  assertEquals(resolveLabel(rejected.title, "fr"), "Session rejetée");
+  const english = resolveLabel(rejected.message, "en");
+  const french = resolveLabel(rejected.message, "fr");
+  assertStringIncludes(
+    english,
+    SPICE_VIEW_CONTRACTS.operatingPoint.sessionSchema,
+  );
+  assertStringIncludes(
+    french,
+    SPICE_VIEW_CONTRACTS.operatingPoint.sessionSchema,
+  );
+  assertStringIncludes(english, "the envelope failed the strict gate");
+  assertStringIncludes(french, "l'enveloppe n'a pas passé le contrôle strict");
+  assertEquals(french.includes("Rejected"), false);
+  assertEquals(projections, 1);
+
+  await withDocument(async (mountRoot) => {
+    const fake = fakeApp(mountRoot, {
+      hostContext: { theme: "light", locale: "en" },
+    });
+    const handle = await startPreactSurfaceApp({
+      ...spiceResultsAppOptions(mountRoot, "operatingPoint"),
+      viewerSession: wrapped,
+      theme: false,
+    }, fake.runtime);
+    await handle.show(rejected);
+    await until(
+      () => (mountRoot.textContent ?? "").includes("Session rejected"),
+      "english session rejection",
+    );
+    fake.hostContextChanged({ locale: "fr" });
+    await until(
+      () => (mountRoot.textContent ?? "").includes("Session rejetée"),
+      "french session rejection",
+    );
+    assertStringIncludes(
+      mountRoot.textContent ?? "",
+      SPICE_VIEW_CONTRACTS.operatingPoint.sessionSchema,
+    );
+    assertEquals(projections, 1);
+    await handle.dispose();
+  });
+});
+
+Deno.test("document language follows the selected dictionary, not the host tag", async () => {
+  const results = spiceResultsAppOptions(root, "operatingPoint");
+  const receipt = spiceReceiptAppOptions(root);
+  assertEquals(results.documentLanguage, spiceMessages.locale);
+  assertEquals(receipt.documentLanguage, spiceMessages.locale);
+  assertEquals(spiceMessages.locale("fr-CA"), "fr");
+  assertEquals(spiceMessages.locale("not a locale"), "en");
+  assertEquals(spiceMessages.locale(), "en");
+
+  await withDocument(async (mountRoot) => {
+    document.documentElement.lang = "de";
+    const fake = fakeApp(mountRoot, {
+      hostContext: { theme: "light", locale: "fr-CA" },
+    });
+    const handle = await startPreactSurfaceApp({
+      ...spiceResultsAppOptions(mountRoot, "operatingPoint"),
+      theme: false,
+    }, fake.runtime);
+    await fake.idle();
+    assertEquals(document.documentElement.lang, "fr");
+    fake.hostContextChanged({ locale: "not a locale" });
+    await fake.idle();
+    assertEquals(document.documentElement.lang, "en");
+    fake.hostContextChanged({ locale: "fr-FR" });
+    await fake.idle();
+    assertEquals(document.documentElement.lang, "fr");
+    await handle.dispose();
+  });
+});
+
+Deno.test("theme-only host updates keep the mounted surface and an open disclosure", async () => {
+  await withDocument(async (mountRoot) => {
+    const fake = fakeApp(mountRoot, {
+      hostContext: { theme: "light", locale: "en" },
+    });
+    const handle = await startPreactSurfaceApp({
+      ...spiceResultsAppOptions(mountRoot, "operatingPoint"),
+      theme: false,
+    }, fake.runtime);
+    await fake.toolResult({
+      content: [],
+      structuredContent: OPERATING_POINT_CONTENT,
+    });
+    await until(
+      () => mountRoot.querySelector(".mcp-view-semantic-element") !== null,
+      "the first result mount",
+    );
+    const surface = mountRoot.querySelector(".mcp-view-semantic-element");
+    const details = mountRoot.querySelector("details.mcp-view-disclosure");
+    if (!details) throw new Error("expected a native technical disclosure");
+    (details as HTMLDetailsElement).open = true;
+    details.setAttribute("open", "");
+    fake.hostContextChanged({ theme: "dark" });
+    await fake.idle();
+    assertStrictEquals(
+      mountRoot.querySelector(".mcp-view-semantic-element"),
+      surface,
+    );
+    assertStrictEquals(
+      mountRoot.querySelector("details.mcp-view-disclosure"),
+      details,
+    );
+    assertEquals((details as HTMLDetailsElement).open, true);
+    fake.hostContextChanged({ locale: "fr" });
+    await until(
+      () => (mountRoot.textContent ?? "").includes("Point de fonctionnement"),
+      "locale remount",
+    );
+    assertEquals(
+      mountRoot.querySelector("details.mcp-view-disclosure") === details,
+      false,
+    );
+    assertEquals(
+      mountRoot.querySelector("details.mcp-view-disclosure")?.hasAttribute("open"),
+      false,
+    );
+    await handle.dispose();
+  });
+});
+
+function resolveLabel(
+  value: string | ((locale?: string) => string) | undefined,
+  locale?: string,
+): string {
+  if (typeof value === "function") return value(locale);
+  return value ?? "";
+}

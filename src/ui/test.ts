@@ -17,6 +17,7 @@ await withAuditedViewerDenoConfig(async (configPath) => {
       join(here, "view-contract_test.ts"),
       join(here, "shared", "surface-app_test.ts"),
       join(here, "shared", "format_test.ts"),
+      join(here, "shared", "i18n_test.ts"),
     ],
     // A machine locale the viewers must not follow: figures keep the host's or `en`.
     env: { LC_ALL: "de_DE.UTF-8" },

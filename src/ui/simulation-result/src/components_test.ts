@@ -98,7 +98,46 @@ Deno.test("the live operating point reads as a datasheet, not as a field dump", 
     assertEquals(text.toLowerCase().includes("pass"), false);
     assertEquals(text.toLowerCase().includes("proof"), false);
     assertEquals(text.toLowerCase().includes("compliance"), false);
+    const details = disclosure(root);
+    assertEquals(details.hasAttribute("open"), false);
+    assertEquals(details.querySelector(".mcp-view-element-reading"), null);
+    assertEquals(details.querySelector(".mcp-view-element-ident"), null);
+    assert(
+      (details.textContent ?? "").includes("Provenance"),
+      "provenance belongs under the closed disclosure",
+    );
+    assertEquals(
+      details.contains(sectionTitle(root, "Measurements")),
+      false,
+      "measurements stay visible",
+    );
+    assert(
+      (details.textContent ?? "").includes("e".repeat(64)) === false,
+      "outcome digest is not repeated inside the disclosure",
+    );
   });
+});
+
+Deno.test("French host locale translates labels and leaves literal states and data", async () => {
+  await withMounted(liveOp, (root) => {
+    const text = root.textContent ?? "";
+    assert(text.includes("Point de fonctionnement"), text);
+    assert(text.includes("Mesures"), text);
+    assert(text.includes("Détails techniques"), text);
+    assert(text.includes("Tension de nœud"), text);
+    assert(text.includes("succeeded"), "execution_state stays literal");
+    assert(
+      text.includes("Temperature remains outside this analysis."),
+      "not_checked content is not translated",
+    );
+    assert(text.includes("e".repeat(64)), "outcome digest stays verbatim");
+    assertEquals(text.includes("Operating point"), false);
+    assertEquals(text.includes("Measurements"), false);
+    assertEquals(text.includes("Technical details"), false);
+    const details = disclosure(root);
+    assertEquals(details.hasAttribute("open"), false);
+    assertEquals(readingValues(root), ["3", "2", "-0,001"]);
+  }, { locale: "fr" });
 });
 
 Deno.test("more quantities than the strip holds are tabled; none is headlined", async () => {
@@ -184,6 +223,14 @@ Deno.test("reduced analyses headline their axis and table extrema with where eac
       Array.from(root.querySelectorAll(".spice-figure-at"), (at) => at.textContent),
       ["at 0 V", "at 5 V", "at 5 V", "at 5 V", "at 0 V", "at 5 V"],
     );
+    const details = disclosure(root);
+    assertEquals(details.hasAttribute("open"), false);
+    assertEquals(
+      details.querySelector(".mcp-view-table"),
+      null,
+      "extrema stay visible outside the disclosure",
+    );
+    assertEquals(details.querySelector(".mcp-view-element-reading"), null);
   });
 
   const transient = parseSimulationViewData({
@@ -270,11 +317,28 @@ Deno.test("the admitted result names its record once and its projection once", a
   await withMounted(admitted, (root) => {
     const text = root.textContent ?? "";
     assertStringIncludes(text, "Admitted operating point");
-    assertStringIncludes(text, "Recorded by project-one r7");
+    assertStringIncludes(text, "Recorded session");
+    assertEquals(text.includes("Recorded by project-one r7"), false);
     assertStringIncludes(text, "Branch current · Vin");
     assertEquals(root.querySelectorAll(".mcp-view-element-reading").length, 2);
     assertEquals(sectionTitles(root), ["Sign convention", "Provenance"]);
-    // The artifact row carries the record's digest; the footer carries the projection's.
+    const details = disclosure(root);
+    assertEquals(details.hasAttribute("open"), false);
+    assertEquals(details.contains(sectionTitle(root, "Sign convention")), true);
+    assertEquals(details.contains(sectionTitle(root, "Provenance")), true);
+    assertEquals(details.querySelector(".mcp-view-element-reading"), null);
+    assertEquals(root.querySelector(".mcp-view-element-provenance"), null);
+    assertStringIncludes(details.textContent ?? "", "project-one");
+    assertStringIncludes(details.textContent ?? "", "Project revision");
+    assertEquals(
+      (details.textContent ?? "").includes("7"),
+      true,
+      "project revision sits in the closed disclosure",
+    );
+    assertStringIncludes(
+      details.textContent ?? "",
+      `sha256:${projectionDigest}`,
+    );
     assertEquals(
       text.split(artifactDigest).length - 1,
       2,
@@ -285,11 +349,6 @@ Deno.test("the admitted result names its record once and its projection once", a
       artifactDigest,
     );
     assertEquals(
-      root.querySelector(".mcp-view-element-provenance code")?.textContent,
-      `sha256:${projectionDigest}`,
-    );
-    // Semantic references carry the bare digest the composition contract validates.
-    assertEquals(
       root.querySelector("[data-basis-fingerprint]")?.getAttribute(
         "data-basis-fingerprint",
       ),
@@ -297,6 +356,18 @@ Deno.test("the admitted result names its record once and its projection once", a
     );
     assertEquals(text.split(projectionDigest).length - 1, 1);
   });
+  await withMounted(admitted, (root) => {
+    const text = root.textContent ?? "";
+    assertStringIncludes(text, "Session enregistrée");
+    assertEquals(text.includes("Recorded session"), false);
+    const details = disclosure(root);
+    assertStringIncludes(details.textContent ?? "", "Projet");
+    assertStringIncludes(details.textContent ?? "", "Révision du projet");
+    assertStringIncludes(details.textContent ?? "", "project-one");
+    assertStringIncludes(details.textContent ?? "", `sha256:${projectionDigest}`);
+    assertEquals(root.querySelector(".mcp-view-element-provenance"), null);
+    assertEquals(text.split(projectionDigest).length - 1, 1);
+  }, { locale: "fr" });
 });
 
 Deno.test("a typed failure keeps its recovery first and shows only what it has", async () => {
@@ -317,6 +388,14 @@ Deno.test("a typed failure keeps its recovery first and shows only what it has",
       "Add a .nodeset for node out and rerun.",
     );
     assertEquals(sectionTitles(root), ["Context"]);
+    const details = disclosure(root);
+    assertEquals(details.hasAttribute("open"), false);
+    assertEquals(details.contains(sectionTitle(root, "Context")), true);
+    assertEquals(
+      (details.textContent ?? "").includes("Add a .nodeset for node out and rerun."),
+      false,
+      "failure recovery stays outside the disclosure",
+    );
     assertStringIncludes(root.textContent ?? "", "iterations");
     assertEquals(root.querySelector(".mcp-view-artifact-row"), null);
     assertStringIncludes(
@@ -412,6 +491,20 @@ function sectionTitles(root: HTMLElement): string[] {
     root.querySelectorAll(".mcp-view-element-section-title"),
     (title) => title.textContent ?? "",
   );
+}
+
+function sectionTitle(root: HTMLElement, title: string): HTMLElement {
+  const node = Array.from(
+    root.querySelectorAll(".mcp-view-element-section-title"),
+  ).find((candidate) => candidate.textContent === title);
+  if (!node) throw new Error(`missing section title ${title}`);
+  return node as HTMLElement;
+}
+
+function disclosure(root: HTMLElement): HTMLDetailsElement {
+  const details = root.querySelector("details.mcp-view-disclosure");
+  if (!details) throw new Error("expected a native technical disclosure");
+  return details as HTMLDetailsElement;
 }
 
 function readingValues(root: HTMLElement): string[] {

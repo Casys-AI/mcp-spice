@@ -80,7 +80,35 @@ Deno.test("the receipt reads as a datasheet: state headlined, every digest once 
       root.querySelector(".mcp-view-element-provenance code")?.textContent,
       "1".repeat(64),
     );
+    const details = disclosure(root);
+    assertEquals(details.hasAttribute("open"), false);
+    assertEquals(details.querySelector(".mcp-view-element-reading"), null);
+    assertEquals(details.contains(sectionTitle(root, "Request")), true);
+    assertEquals(details.contains(sectionTitle(root, "Runtime")), true);
+    assertEquals(details.contains(sectionTitle(root, "Digests")), true);
+    assertEquals(
+      (details.textContent ?? "").includes("1".repeat(64)),
+      false,
+      "receipt digest stays in the footer only",
+    );
   });
+});
+
+Deno.test("French receipt labels follow the host locale; execution_state stays literal", async () => {
+  await withMounted(receipt, (root) => {
+    const text = root.textContent ?? "";
+    assert(text.includes("Reçu de simulation"), text);
+    assert(text.includes("Détails techniques"), text);
+    assert(text.includes("État d'exécution"), text);
+    assert(text.includes("succeeded"));
+    assertEquals(text.includes("Simulation receipt"), false);
+    assertEquals(readingValues(root), ["succeeded"]);
+    const details = disclosure(root);
+    assertEquals(details.hasAttribute("open"), false);
+    assertEquals(details.contains(sectionTitle(root, "Requête")), true);
+    assertEquals(details.contains(sectionTitle(root, "Runtime")), true);
+    assertEquals(details.contains(sectionTitle(root, "Empreintes")), true);
+  }, { locale: "fr" });
 });
 
 Deno.test("a transient receipt headlines its time axis in the host locale", async () => {
@@ -117,6 +145,13 @@ Deno.test("a failed receipt keeps its literal state and turns the sheet to dange
     const element = root.querySelector(".mcp-view-semantic-element");
     assertEquals(element?.getAttribute("data-tone"), "danger");
     assertEquals(readingValues(root), ["failed"]);
+    const details = disclosure(root);
+    assertEquals(details.hasAttribute("open"), false);
+    assertEquals(details.querySelector(".mcp-view-element-reading"), null);
+    assertEquals(
+      root.querySelector(".mcp-view-element-reading-value")?.textContent,
+      "failed",
+    );
   });
 });
 
@@ -161,6 +196,19 @@ function sectionTitles(root: HTMLElement): string[] {
   return [...root.querySelectorAll(".mcp-view-element-section-title")].map(
     (title) => title.textContent ?? "",
   );
+}
+
+function sectionTitle(root: HTMLElement, title: string): HTMLElement {
+  const node = [...root.querySelectorAll(".mcp-view-element-section-title")]
+    .find((candidate) => candidate.textContent === title);
+  if (!node) throw new Error(`missing section title ${title}`);
+  return node as HTMLElement;
+}
+
+function disclosure(root: HTMLElement): HTMLDetailsElement {
+  const details = root.querySelector("details.mcp-view-disclosure");
+  if (!details) throw new Error("expected a native technical disclosure");
+  return details as HTMLDetailsElement;
 }
 
 function readingValues(root: HTMLElement): string[] {

@@ -21,16 +21,29 @@ All notable changes to this project will be documented in this file. Format:
   axis and table extrema with where on the axis each was taken. The body is titled
   sections of reader-worded facts (`Measurements`, `Sign convention`, `Execution`,
   `Digests`, `Provenance`, …); the netlist and an admitted artifact each get an
-  `ArtifactRow` carrying their fingerprint; the outcome or projection digest sits in the
-  footer only, never in a section as well. The sign convention of an admitted result is
-  now shown. The receipt headlines its execution state and analysis axis, then
-  `Request`, `Runtime` and `Digests`. The App shells no longer pin `aria-busy` on the
-  root: the kit's loading status owns it.
+  `ArtifactRow` carrying their fingerprint. Live and failed results keep the outcome
+  digest in the footer only. An admitted recorded operating point uses the short
+  `Recorded session` subtitle, moves project id, project revision and the projection
+  SHA-256 into the closed disclosure, and has no projection footer so that hash appears
+  once. The sign convention of an admitted result is now shown. The receipt headlines
+  its execution state and analysis axis; request, runtime and digests sit with the other
+  technical facts. The App shells no longer pin `aria-busy` on the root: the kit's
+  loading status owns it.
 
 - The five viewer bundles are rebuilt on `@casys/mcp-view@0.9.3` +
-  `@casys/mcp-view-components@0.7.0` (`Casys-AI/mcp-server@59eeb37`). The only behaviour
-  change is the kit's: a complete `tool-input`, not only a partial one, returns the App
-  to `loading`.
+  `@casys/mcp-view-components@0.9.0` (`Casys-AI/mcp-server@b08802df`). Interface labels,
+  headings, empty/loading wording and accessible names follow the host locale in English
+  and French; `execution_state`, codes, digests, units and `not_checked` content stay
+  literal. A refused recorded session stores `title` and the interface message template
+  as `SurfaceLabel` callbacks so a visible rejection follows the host locale without
+  rerunning session parsing. `<html lang>` follows `spiceMessages.locale`. Invalid
+  `Intl` locales fall back to English; valid regional tags such as `fr-CA` keep their
+  own formatting. Request, runtime, digests and provenance sit under a closed native
+  disclosure; execution state, readings, quantities, extrema and failure recovery stay
+  visible. Theme-only host updates keep the mounted surface (`themeUpdates: "in-place"`)
+  because these Apps consume the shared CSS tokens.
+
+- In-tree package, MCP App and viewer-manifest identity is `0.6.3` (unreleased).
 
 ### Documentation
 

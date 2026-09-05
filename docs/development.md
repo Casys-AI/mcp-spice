@@ -6,9 +6,12 @@
 - ngspice on `PATH` for the native integration gate
 - Git for source and bundle freshness checks
 
-Viewer builds also use the exact split MCP View source pinned in the workflows. The
-environment variables `MCP_VIEW_LOCAL_ROOT`, `MCP_VIEW_CONTRACTS_LOCAL_ROOT`, and
-`MCP_VIEW_COMPONENTS_LOCAL_ROOT` may point to a reviewed local checkout.
+Viewer builds also use the exact split MCP View source pinned in the workflows at
+`Casys-AI/mcp-server@b08802df353bb25d25a1c8d64b22ea61b5287ae0` (`@casys/mcp-view@0.9.3`,
+`@casys/mcp-view-contracts@0.1.0`, `@casys/mcp-view-components@0.9.0`). The environment
+variables `MCP_VIEW_LOCAL_ROOT`, `MCP_VIEW_CONTRACTS_LOCAL_ROOT`, and
+`MCP_VIEW_COMPONENTS_LOCAL_ROOT` must point to that checkout; the UI build refuses any
+other package identity or git revision.
 
 ## Source loop
 

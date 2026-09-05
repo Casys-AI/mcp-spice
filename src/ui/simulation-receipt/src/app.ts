@@ -1,3 +1,4 @@
+import { mcpViewMessages } from "@casys/mcp-view-components";
 import {
   type PreactSurfaceAppOptions,
   startPreactSurfaceApp,
@@ -5,6 +6,7 @@ import {
 } from "@casys/mcp-view-components/preact";
 import { installMcpViewFonts } from "@casys/mcp-view-components/fonts";
 import { SPICE_VIEW_APP_ID, SPICE_VIEW_APP_VERSION } from "../../constants.ts";
+import { spiceMessages } from "../../shared/i18n.ts";
 import {
   recordedSessionProjection,
   SPICE_STATUS_CLASS,
@@ -45,8 +47,11 @@ export function spiceReceiptAppOptions(root: HTMLElement): SpiceReceiptAppOption
     strict: true,
     surfaceClassName: SPICE_SURFACE_CLASS,
     statusClassName: SPICE_STATUS_CLASS,
-    loadingLabel: "Receiving a documentary simulation receipt…",
-    emptyLabel: "SPICE returned no documentary receipt projection.",
+    messages: mcpViewMessages,
+    loadingLabel: (locale) => spiceMessages(locale)("loadingReceipt"),
+    emptyLabel: (locale) => spiceMessages(locale)("emptyReceipt"),
+    documentLanguage: spiceMessages.locale,
+    themeUpdates: "in-place",
     fromToolResult: displayStateFromReceiptToolResult,
     viewerSession: recordedSessionProjection(
       "simulationReceipt",

@@ -44,6 +44,7 @@ Deno.test("five committed resources are distinct App-level session receivers", a
     assertInlineModule(html);
     assert(html.includes("viewer.session.apply"), SPICE_VIEWERS[index]);
     assert(html.includes("mcp-view-semantic-element"), SPICE_VIEWERS[index]);
+    assert(html.includes("mcp-view-disclosure"), SPICE_VIEWERS[index]);
     assertEquals(html.includes("ElementVerdict"), false);
     assertEquals(html.includes("PathBar"), false);
     assertEquals(html.includes("spice.node-statistics"), false);

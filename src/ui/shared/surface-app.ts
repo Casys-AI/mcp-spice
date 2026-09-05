@@ -1,11 +1,14 @@
 /** What every SPICE App adds to the kit lifecycle: classes, codes, startup failure. */
 
+import { mcpViewMessages } from "@casys/mcp-view-components";
 import {
   renderStatusMessage,
   type SurfaceDisplayState,
+  type SurfaceLabel,
   type SurfaceViewerSession,
 } from "@casys/mcp-view-components/preact";
 import { SPICE_VIEW_CONTRACTS, type SpiceViewKey } from "../view-app-manifest.ts";
+import { spiceMessages } from "./i18n.ts";
 import {
   parseSpiceRecordedViewSession,
   type SpiceRecordedViewSession,
@@ -29,11 +32,14 @@ export function recordedSessionProjection<TData>(
 ): SurfaceViewerSession<TData, unknown> {
   return {
     validate: (_value: unknown): _value is unknown => true,
-    toState: async (value) => {
+    toState: async (value, _host) => {
       try {
         const session = await parseSpiceRecordedViewSession(view, value);
         if (!session) {
-          return sessionRejected(view, "the envelope failed the strict gate");
+          return sessionRejected(
+            view,
+            (locale) => spiceMessages(locale)("envelopeRejected"),
+          );
         }
         return { kind: "result", result: await toData(session) };
       } catch (error) {
@@ -46,13 +52,18 @@ export function recordedSessionProjection<TData>(
 /** The danger state for a recorded `view` session the App refuses to project. */
 export function sessionRejected<TData>(
   view: SpiceViewKey,
-  detail: string,
+  detail: SurfaceLabel,
 ): SurfaceDisplayState<TData> {
+  const schema = SPICE_VIEW_CONTRACTS[view].sessionSchema;
   return {
     kind: "error",
-    title: "Session rejected",
+    title: (locale) => mcpViewMessages(locale)("sessionRejectedTitle"),
     code: SESSION_REJECTED_CODE,
-    message: `Rejected ${SPICE_VIEW_CONTRACTS[view].sessionSchema} session: ${detail}`,
+    message: (locale) =>
+      spiceMessages(locale)("sessionRejected", {
+        schema,
+        detail: typeof detail === "function" ? detail(locale) : detail,
+      }),
   };
 }
 

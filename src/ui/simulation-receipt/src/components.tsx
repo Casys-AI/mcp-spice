@@ -10,6 +10,7 @@ import {
   type PreactSurfaceContext,
 } from "@casys/mcp-view-components/preact";
 import {
+  Disclosure,
   ElementBody,
   ElementIdent,
   ElementProvenance,
@@ -22,6 +23,7 @@ import {
 import type { ComponentChild } from "preact";
 import { SPICE_RECEIPT_COMPONENT } from "../../constants.ts";
 import { type NumberFormats, numberFormats } from "../../shared/format.ts";
+import { spiceMessages, type SpiceTranslator } from "../../shared/i18n.ts";
 import type {
   AnalysisKind,
   NormalizedRequest,
@@ -52,19 +54,25 @@ interface Fact {
   readonly value: ComponentChild;
 }
 
-const ANALYSIS_LABELS: Record<AnalysisKind, string> = {
-  op: "Operating point",
-  tran: "Transient",
-  dc: "DC sweep",
-};
+function analysisLabel(kind: AnalysisKind, t: SpiceTranslator): string {
+  switch (kind) {
+    case "op":
+      return t("analysisOp");
+    case "tran":
+      return t("analysisTran");
+    case "dc":
+      return t("analysisDc");
+  }
+}
 
 /**
  * A receipt reads as a datasheet: what ran and how it ended in the readings strip,
- * what was asked, on which runtime, and every digest once in its own section.
+ * request/runtime/digests under a closed native disclosure.
  */
 const Receipt = ({ data, context }: ReceiptProps) => {
   const { receipt } = data;
   const failed = receipt.execution_state === "failed";
+  const t = spiceMessages(context.hostContext.locale);
   const format = numberFormats(context.hostContext.locale);
   return (
     <SemanticElement
@@ -79,13 +87,13 @@ const Receipt = ({ data, context }: ReceiptProps) => {
       ident={
         <ElementIdent
           marker={receipt.analysis_kind.toUpperCase()}
-          label="Simulation receipt"
-          detail={`${
-            ANALYSIS_LABELS[receipt.analysis_kind]
-          } analysis · documentary record`}
+          label={t("simulationReceipt")}
+          detail={t("receiptDetail", {
+            analysis: analysisLabel(receipt.analysis_kind, t),
+          })}
         />
       }
-      reading={readings(receipt, format).map((reading) => (
+      reading={readings(receipt, format, t).map((reading) => (
         <ElementReading
           key={reading.id}
           label={reading.label}
@@ -95,20 +103,22 @@ const Receipt = ({ data, context }: ReceiptProps) => {
       ))}
       body={
         <ElementBody>
-          <ElementSection title="Request">
-            <Facts items={requestFacts(receipt.normalized_request, format)} />
-          </ElementSection>
-          <ElementSection title="Runtime">
-            <Facts items={runtimeFacts(receipt.runtime_identity)} />
-          </ElementSection>
-          <ElementSection title="Digests">
-            <Facts items={digestFacts(receipt)} />
-          </ElementSection>
+          <Disclosure label={t("technicalDetails")}>
+            <ElementSection title={t("request")}>
+              <Facts items={requestFacts(receipt.normalized_request, format, t)} />
+            </ElementSection>
+            <ElementSection title={t("runtime")}>
+              <Facts items={runtimeFacts(receipt.runtime_identity, t)} />
+            </ElementSection>
+            <ElementSection title={t("digests")}>
+              <Facts items={digestFacts(receipt, t)} />
+            </ElementSection>
+          </Disclosure>
         </ElementBody>
       }
       provenance={
         <ElementProvenance
-          label="Receipt"
+          label={t("receipt")}
           value={<InlineCode>{data.receipt_sha256}</InlineCode>}
         />
       }
@@ -134,11 +144,15 @@ export const SPICE_RECEIPT_REGISTRY = defineComponentRegistry<
 });
 
 /** The terminal state is copied literally; the analysis axis joins it as the headline. */
-function readings(receipt: SimulationReceipt, format: NumberFormats): Reading[] {
+function readings(
+  receipt: SimulationReceipt,
+  format: NumberFormats,
+  t: SpiceTranslator,
+): Reading[] {
   const request = receipt.normalized_request;
   const state: Reading = {
     id: "state",
-    label: "Execution state",
+    label: t("executionState"),
     value: receipt.execution_state,
   };
   if (request.kind === "tran") {
@@ -146,13 +160,13 @@ function readings(receipt: SimulationReceipt, format: NumberFormats): Reading[] 
       state,
       {
         id: "tstep",
-        label: "Time step",
+        label: t("timeStep"),
         value: format.number(request.tstep_s),
         unit: "s",
       },
       {
         id: "tstop",
-        label: "Stop time",
+        label: t("stopTime"),
         value: format.number(request.tstop_s),
         unit: "s",
       },
@@ -161,46 +175,71 @@ function readings(receipt: SimulationReceipt, format: NumberFormats): Reading[] 
   if (request.kind === "dc") {
     return [
       state,
-      { id: "source", label: "Swept source", value: request.sweep_source },
-      { id: "start", label: "Start", value: format.number(request.start_v), unit: "V" },
-      { id: "stop", label: "Stop", value: format.number(request.stop_v), unit: "V" },
-      { id: "step", label: "Step", value: format.number(request.step_v), unit: "V" },
+      { id: "source", label: t("sweptSource"), value: request.sweep_source },
+      {
+        id: "start",
+        label: t("start"),
+        value: format.number(request.start_v),
+        unit: "V",
+      },
+      { id: "stop", label: t("stop"), value: format.number(request.stop_v), unit: "V" },
+      { id: "step", label: t("step"), value: format.number(request.step_v), unit: "V" },
     ];
   }
   return [state];
 }
 
-function requestFacts(request: NormalizedRequest, format: NumberFormats): Fact[] {
+function requestFacts(
+  request: NormalizedRequest,
+  format: NumberFormats,
+  t: SpiceTranslator,
+): Fact[] {
   return [
-    { id: "nodes", label: "Nodes", value: request.nodes.join(", ") || "—" },
+    {
+      id: "nodes",
+      label: t("nodes"),
+      value: request.nodes.join(", ") || t("emptyList"),
+    },
     {
       id: "branch-sources",
-      label: "Branch sources",
-      value: request.branch_sources.join(", ") || "—",
+      label: t("branchSources"),
+      value: request.branch_sources.join(", ") || t("emptyList"),
     },
-    { id: "timeout", label: "Timeout", value: `${format.number(request.timeout_s)} s` },
+    {
+      id: "timeout",
+      label: t("timeout"),
+      value: t("timeoutValue", { n: format.number(request.timeout_s) }),
+    },
   ];
 }
 
-function runtimeFacts(identity: RuntimeIdentity): Fact[] {
+function runtimeFacts(identity: RuntimeIdentity, t: SpiceTranslator): Fact[] {
   return [
     { id: "mcp-spice", label: "mcp-spice", value: identity.mcp_spice_version },
-    { id: "engine", label: "Engine", value: identity.ngspice_version },
+    { id: "engine", label: t("engine"), value: identity.ngspice_version },
     { id: "deno", label: "Deno", value: identity.deno_version },
-    { id: "platform", label: "Platform", value: `${identity.os} / ${identity.arch}` },
-    { id: "budgets", label: "Execution budgets", value: identity.execution_budgets },
+    {
+      id: "platform",
+      label: t("platform"),
+      value: `${identity.os} / ${identity.arch}`,
+    },
+    {
+      id: "budgets",
+      label: t("executionBudgets"),
+      value: identity.execution_budgets,
+    },
   ];
 }
 
-function digestFacts(receipt: SimulationReceipt): Fact[] {
+function digestFacts(receipt: SimulationReceipt, t: SpiceTranslator): Fact[] {
   return [
-    { id: "request", label: "Request", value: digest(receipt.request_sha256) },
-    { id: "dispatch", label: "Dispatch", value: digest(receipt.dispatch_sha256) },
-    { id: "netlist", label: "Netlist", value: digest(receipt.netlist_sha256) },
-    { id: "outcome", label: "Outcome", value: digest(receipt.outcome_sha256) },
+    { id: "request", label: t("request"), value: digest(receipt.request_sha256) },
+    { id: "dispatch", label: t("dispatch"), value: digest(receipt.dispatch_sha256) },
+    { id: "netlist", label: t("netlist"), value: digest(receipt.netlist_sha256) },
+    { id: "outcome", label: t("outcome"), value: digest(receipt.outcome_sha256) },
     {
       id: "engine",
-      label: "Engine",
+      label: t("engine"),
       value: digest(receipt.runtime_identity.ngspice_version_sha256),
     },
   ];

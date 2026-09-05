@@ -46,7 +46,7 @@ export const SPICE_RESULT_SCHEMA_IDS = {
 
 export const SPICE_VIEW_APP_ID = "io.casys.mcp-spice.results";
 export const SPICE_VIEW_APP_TITLE = "SPICE Simulation Results";
-export const SPICE_VIEW_APP_VERSION = "0.6.2";
+export const SPICE_VIEW_APP_VERSION = "0.6.3";
 
 export const SPICE_RESULT_COMPONENT = "spice.simulation-result";
 export const SPICE_RECEIPT_COMPONENT = "spice.simulation-receipt";

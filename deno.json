@@ -1,6 +1,6 @@
 {
   "name": "@casys/mcp-spice",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "minimumDependencyAge": {
     "age": "P1D",
     "exclude": ["jsr:@casys/mcp-server", "jsr:@casys/mcp-view-contracts"]

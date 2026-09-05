@@ -14,11 +14,29 @@ export const DEFAULT_LOCALE = "en";
  * the same result reads the same everywhere.
  */
 export function numberFormats(locale: string | undefined): NumberFormats {
-  const resolved = locale ?? DEFAULT_LOCALE;
-  const number = new Intl.NumberFormat(resolved, { maximumFractionDigits: 6 });
-  const integer = new Intl.NumberFormat(resolved, { maximumFractionDigits: 0 });
+  const number = localeNumberFormat(locale, { maximumFractionDigits: 6 });
+  const integer = localeNumberFormat(locale, { maximumFractionDigits: 0 });
   return {
     number: (value) => number.format(value),
     integer: (value) => integer.format(value),
   };
+}
+
+/**
+ * Absent locale keeps English. Invalid tags fall back to English. Valid host
+ * locales, including regional variants such as `fr-CA`, go directly to Intl.
+ */
+function localeNumberFormat(
+  locale: string | undefined,
+  options: Intl.NumberFormatOptions,
+): Intl.NumberFormat {
+  const resolved = locale ?? DEFAULT_LOCALE;
+  try {
+    return new Intl.NumberFormat(resolved, options);
+  } catch (error) {
+    if (error instanceof RangeError) {
+      return new Intl.NumberFormat(DEFAULT_LOCALE, options);
+    }
+    throw error;
+  }
 }
