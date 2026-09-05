@@ -12,7 +12,7 @@ Start the stateless HTTP transport:
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:e5bcf112ec37d71d9a02dfcb1c65af0ed77fe497e97e16e931bfb6baa0dd367d http
+  ghcr.io/casys-ai/mcp-spice@sha256:3d42ff26d3114e3f0e3e2302261d94fa2aaf612758078a7e624aac1eda924551 http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. The server binds to `127.0.0.1:3023` by
@@ -23,7 +23,7 @@ For native stdio:
 ```bash
 docker run --rm -i \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:e5bcf112ec37d71d9a02dfcb1c65af0ed77fe497e97e16e931bfb6baa0dd367d stdio
+  ghcr.io/casys-ai/mcp-spice@sha256:3d42ff26d3114e3f0e3e2302261d94fa2aaf612758078a7e624aac1eda924551 stdio
 ```
 
 Passing `stdio` replaces the image's default `http` command. It does not start an HTTP
@@ -47,13 +47,13 @@ sudo apt install ngspice
 Run the exact published module over stdio:
 
 ```bash
-deno run --allow-all jsr:@casys/mcp-spice@0.6.2/server --stdio
+deno run --allow-all jsr:@casys/mcp-spice@0.6.3/server --stdio
 ```
 
 Or start its HTTP transport:
 
 ```bash
-deno run --allow-all jsr:@casys/mcp-spice@0.6.2/server --port=3023
+deno run --allow-all jsr:@casys/mcp-spice@0.6.3/server --port=3023
 ```
 
 The JSR package exports `createSpiceServer`, `SpiceToolsClient`, the tool registry,

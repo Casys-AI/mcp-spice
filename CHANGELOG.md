@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file. Format:
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Versioning:
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.3] - 2026-09-05
 
 ### Changed
 
@@ -43,11 +43,11 @@ All notable changes to this project will be documented in this file. Format:
   visible. Theme-only host updates keep the mounted surface (`themeUpdates: "in-place"`)
   because these Apps consume the shared CSS tokens.
 
-- In-tree package, MCP App and viewer-manifest identity is `0.6.3` (unreleased).
+- In-tree package, MCP App and viewer-manifest identity is `0.6.3`.
 
 ### Documentation
 
-- Pin the published 0.6.2 multi-architecture image by its immutable OCI index digest.
+- Pin the published 0.6.3 multi-architecture image by its immutable OCI index digest.
 - The README image is reproducible: `deno task docs:viewer-screenshot` replays the
   registered MCS01 operating-point session (`docs/fixtures/`) through the built bundle
   in headless Chrome; `tests/viewer_docs_test.ts` keeps the fixture on the App's strict
