@@ -72,3 +72,39 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # JSR publishes from main independently of this tag workflow. Verification
+  # therefore runs only after GHCR has been pushed, then waits a bounded time
+  # for the JSR version to exist. Missing or mismatched surfaces fail closed.
+  verify-published:
+    if: github.event_name == 'push'
+    needs: build-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+
+      - name: Verify published JSR and GHCR artifacts
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          COMMIT="$(git rev-parse --verify HEAD)"
+          deno task verify:published \
+            --git-tag "$TAG" \
+            --expected-commit "$COMMIT" \
+            --wait-timeout-ms 300000 \
+            --wait-interval-ms 10000 \
+            > "${RUNNER_TEMP}/published-evidence.json"
+
+      - name: Archive published evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-evidence
+          path: ${{ runner.temp }}/published-evidence.json
+          if-no-files-found: error

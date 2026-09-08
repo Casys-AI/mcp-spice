@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file. Format:
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Versioning:
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Deployment examples keep digest-pinned `docker run` instructions, using
+  `ghcr.io/casys-ai/mcp-spice@sha256:<verified-index-digest>` as a placeholder filled
+  from post-publication verifier evidence rather than a mutable version tag or a digest
+  baked into the source tree.
+
+### Added
+
+- A fail-closed post-publication verifier (`scripts/verify_published.ts`) and Docker
+  workflow step. After both JSR and GHCR exist, it records the exact JSR version, tag
+  commit, GHCR index digest, and per-platform config identity. JSR byte checks cover
+  README and deno.json only; JSR normalizes TypeScript imports during publication.
+  Successful evidence is archived as a JSON GitHub Actions artifact. Missing or
+  mismatched surfaces fail; they are not marked successful.
+
 ## [0.6.3] - 2026-09-05
 
 ### Changed

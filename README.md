@@ -29,13 +29,15 @@ proof or compliance verdict.
 ## Run it
 
 The published container includes Deno and ngspice. Its default command starts the HTTP
-transport on port `3023`:
+transport on port `3023`. Pin the runtime to the GHCR index digest recorded by the
+post-publication verifier; replace `<verified-index-digest>` with that digest. Do not
+treat a mutable version tag as the runtime identity.
 
 ```bash
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:3d42ff26d3114e3f0e3e2302261d94fa2aaf612758078a7e624aac1eda924551 http
+  ghcr.io/casys-ai/mcp-spice@sha256:<verified-index-digest> http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. Native stdio is available from the same
@@ -44,7 +46,7 @@ image:
 ```bash
 docker run --rm -i \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:3d42ff26d3114e3f0e3e2302261d94fa2aaf612758078a7e624aac1eda924551 stdio
+  ghcr.io/casys-ai/mcp-spice@sha256:<verified-index-digest> stdio
 ```
 
 To run the published JSR module, install `ngspice` on the host, then use the exact

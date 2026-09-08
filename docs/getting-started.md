@@ -12,7 +12,7 @@ Start the stateless HTTP transport:
 docker run --rm \
   -p 127.0.0.1:3023:3023 \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:3d42ff26d3114e3f0e3e2302261d94fa2aaf612758078a7e624aac1eda924551 http
+  ghcr.io/casys-ai/mcp-spice@sha256:<verified-index-digest> http
 ```
 
 The MCP endpoint is `http://127.0.0.1:3023/mcp`. The server binds to `127.0.0.1:3023` by
@@ -23,14 +23,16 @@ For native stdio:
 ```bash
 docker run --rm -i \
   -v mcp-spice-runs:/ngspice-runs \
-  ghcr.io/casys-ai/mcp-spice@sha256:3d42ff26d3114e3f0e3e2302261d94fa2aaf612758078a7e624aac1eda924551 stdio
+  ghcr.io/casys-ai/mcp-spice@sha256:<verified-index-digest> stdio
 ```
 
 Passing `stdio` replaces the image's default `http` command. It does not start an HTTP
 child process.
 
-The pinned OCI index contains `linux/amd64` and `linux/arm64` manifests. A version tag
-identifies the release; the digest above is the immutable runtime identity.
+The pinned OCI index contains `linux/amd64` and `linux/arm64` manifests. Replace
+`<verified-index-digest>` with the GHCR index digest recorded by the post-publication
+verifier. That digest is the immutable runtime identity; do not substitute a mutable
+version tag.
 
 ## JSR
 
