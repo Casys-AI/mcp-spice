@@ -60,5 +60,37 @@ A push to `main` runs the native release gate and publishes a new immutable JSR 
 when the version is not already present. A matching `v<version>` tag runs the native
 gate again, then builds and publishes the multi-architecture GHCR image.
 
+After that GHCR publish, the Docker workflow runs a fail-closed verifier. JSR may
+already have been published from `main`; the verifier polls a bounded time until both
+publication surfaces exist, then records and checks:
+
+- the exact JSR version and the manifest checksums/sizes of `README.md` and `deno.json`
+  against those two files in the tag, reported explicitly as `checkedFiles`;
+- the exact GHCR tag and immutable OCI index digest (`Docker-Content-Digest` and the
+  SHA-256 of the index bytes);
+- each `linux/amd64` and `linux/arm64` image config's `os`/`architecture` plus
+  `org.opencontainers.image.source`, `revision`, and `version` labels against that same
+  commit.
+
+JSR
+[rewrites TypeScript imports during publication](https://jsr.io/docs/publishing-packages).
+The verifier does not compare all TypeScript source bytes or independently attest the
+JSR publishing commit. It checks the two unchanged JSR identity files and the GHCR
+revision/version/platform identities.
+
+A missing surface or a mismatch fails the job. The verifier never marks those cases
+successful. Successful evidence is written to a JSON file and archived as a GitHub
+Actions artifact. Run `scripts/verify_published.ts` against an explicit tag after both
+surfaces are available:
+
+```bash
+deno task verify:published --git-tag v<version> --expected-commit <tag-commit>
+```
+
+Deployment examples keep the digest-pinned form
+`ghcr.io/casys-ai/mcp-spice@sha256:<verified-index-digest>`. Fill that placeholder from
+the verifier evidence after an approved tag publish. This tree does not bake in a
+previous release's digest or treat a mutable version tag as the runtime identity.
+
 The tag must exactly match `deno.json`. Do not reuse a published JSR version or move a
 release tag.
