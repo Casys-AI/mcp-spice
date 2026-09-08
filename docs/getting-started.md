@@ -49,13 +49,13 @@ sudo apt install ngspice
 Run the exact published module over stdio:
 
 ```bash
-deno run --allow-all jsr:@casys/mcp-spice@0.6.3/server --stdio
+deno run --allow-all jsr:@casys/mcp-spice@0.6.4/server --stdio
 ```
 
 Or start its HTTP transport:
 
 ```bash
-deno run --allow-all jsr:@casys/mcp-spice@0.6.3/server --port=3023
+deno run --allow-all jsr:@casys/mcp-spice@0.6.4/server --port=3023
 ```
 
 The JSR package exports `createSpiceServer`, `SpiceToolsClient`, the tool registry,

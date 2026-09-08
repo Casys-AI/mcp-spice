@@ -53,7 +53,7 @@ To run the published JSR module, install `ngspice` on the host, then use the exa
 version:
 
 ```bash
-deno run --allow-all jsr:@casys/mcp-spice@0.6.3/server --stdio
+deno run --allow-all jsr:@casys/mcp-spice@0.6.4/server --stdio
 ```
 
 For local development:

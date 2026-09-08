@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file. Format:
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-09-08
+
 ### Changed
 
 - Deployment examples keep digest-pinned `docker run` instructions, using
