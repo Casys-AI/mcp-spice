@@ -4,7 +4,7 @@
 exact circuit bytes that produced it.
 
 [JSR](https://jsr.io/@casys/mcp-spice) ·
-[container](https://github.com/Casys-AI/mcp-spice/pkgs/container/mcp-spice) ·
+[container](https://github.com/orgs/Casys-AI/packages/container/package/mcp-spice) ·
 [technical documentation](docs/README.md) · [changelog](CHANGELOG.md) ·
 [security](SECURITY.md)
 
