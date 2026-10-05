@@ -2,17 +2,17 @@
  * Fail-closed verifier for tagged Casys SPICE on public JSR and GHCR.
  * Compares JSR README/deno.json and GHCR identity to the tag, not the working tree.
  * JSR rewrites TypeScript imports: this does not verify all source bytes or JSR provenance.
- * Identity is fixed; GHCR uses anonymous public token exchange only.
+ * Release source and GHCR image are explicit context; GHCR exchange stays anonymous.
  */
 
 export const PUBLISHED_PACKAGE = "@casys/mcp-spice";
+// Historical GHCR coordinates remain available for explicit verification of old releases.
 export const PUBLISHED_IMAGE = "ghcr.io/casys-ai/mcp-spice";
 export const PUBLISHED_SOURCE = "https://github.com/Casys-AI/mcp-spice";
 export const REQUIRED_PLATFORMS = ["linux/amd64", "linux/arm64"] as const;
 
 const JSR_ORIGIN = "https://jsr.io";
 const GHCR = "ghcr.io";
-const REPO = "casys-ai/mcp-spice";
 const REQUEST_TIMEOUT_MS = 15_000;
 const TAG_PATTERN = /^v([0-9]+\.[0-9]+\.[0-9]+)$/;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
@@ -24,25 +24,25 @@ const MANIFEST_TYPES = [
   "application/vnd.oci.image.manifest.v1+json",
   "application/vnd.docker.distribution.manifest.v2+json",
 ];
-const TOKEN_URL = `https://${GHCR}/token?service=${GHCR}&scope=repository:${REPO}:pull`;
-const MANIFESTS = `https://${GHCR}/v2/${REPO}/manifests`;
-const BLOBS = `https://${GHCR}/v2/${REPO}/blobs`;
 
 const USAGE = `Verify that a tagged mcp-spice release matches published JSR and GHCR.
 
 Usage:
-  deno task verify:published --git-tag v<version> [options]
+  deno task verify:published --git-tag v<version> --expected-source <url> [options]
 
 Required:
   --git-tag vX.Y.Z          Release tag; version is taken from the tag
+  --expected-source <url>   Trusted GitHub source URL for this release
 
 Options:
   --expected-commit <sha>   Full 40-hex commit the tag must peel to
+  --image <ghcr image>      Bare ghcr.io/<owner>/mcp-spice (default: historical Casys image)
   --wait-timeout-ms <n>     Bounded wait for both surfaces (default: 120000)
   --wait-interval-ms <n>    Poll interval while waiting (default: 5000)
   --help, -h                Print this usage text
 
-JSR is ${JSR_ORIGIN}/${PUBLISHED_PACKAGE}. GHCR is ${PUBLISHED_IMAGE}.
+JSR remains ${JSR_ORIGIN}/${PUBLISHED_PACKAGE}. Historical GHCR is ${PUBLISHED_IMAGE}.
+Historical source verification: --expected-source ${PUBLISHED_SOURCE}.
 Authentication is anonymous public GHCR token exchange; caller tokens are not read.
 `;
 
@@ -78,6 +78,8 @@ export interface CliOptions {
   gitTag: string;
   version: string;
   expectedCommit?: string;
+  expectedSource: string;
+  image: string;
   waitTimeoutMs: number;
   waitIntervalMs: number;
 }
@@ -118,7 +120,12 @@ export interface PublishedEvidence {
   gitTag: string;
   commit: string;
   jsr: { version: string; checkedFiles: string[] };
-  ghcr: { tag: string; indexDigest: string; platforms: PublishedPlatform[] };
+  ghcr: {
+    image: string;
+    tag: string;
+    indexDigest: string;
+    platforms: PublishedPlatform[];
+  };
 }
 
 interface HttpBody {
@@ -141,6 +148,8 @@ export function parseArgs(args: string[]): CliOptions {
       help: true,
       gitTag: "",
       version: "",
+      expectedSource: "",
+      image: PUBLISHED_IMAGE,
       waitTimeoutMs: 120_000,
       waitIntervalMs: 5_000,
     };
@@ -148,6 +157,8 @@ export function parseArgs(args: string[]): CliOptions {
 
   let gitTag: string | undefined;
   let expectedCommit: string | undefined;
+  let expectedSource: string | undefined;
+  let image = PUBLISHED_IMAGE;
   let waitTimeoutMs = 120_000;
   let waitIntervalMs = 5_000;
 
@@ -164,6 +175,14 @@ export function parseArgs(args: string[]): CliOptions {
         break;
       case "--expected-commit":
         expectedCommit = readFlagValue(arg, value).toLowerCase();
+        i++;
+        break;
+      case "--expected-source":
+        expectedSource = readFlagValue(arg, value);
+        i++;
+        break;
+      case "--image":
+        image = readFlagValue(arg, value);
         i++;
         break;
       case "--wait-timeout-ms":
@@ -186,6 +205,13 @@ export function parseArgs(args: string[]): CliOptions {
   if (!tagMatch) {
     throw invalidCli("git-tag must be v<major.minor.patch>", { gitTag });
   }
+  if (expectedSource === undefined) {
+    throw invalidCli("missing required --expected-source", {
+      flag: "--expected-source",
+    });
+  }
+  validateSource(expectedSource);
+  registryImage(image);
   if (expectedCommit !== undefined && !COMMIT_PATTERN.test(expectedCommit)) {
     throw invalidCli("expected-commit must be a 40-character hex SHA", {
       expectedCommit,
@@ -202,6 +228,8 @@ export function parseArgs(args: string[]): CliOptions {
     gitTag,
     version: tagMatch[1],
     expectedCommit,
+    expectedSource,
+    image,
     waitTimeoutMs,
     waitIntervalMs,
   };
@@ -215,10 +243,12 @@ export async function verifyPublished(
     throw invalidCli("missing required flag", { flag: "--git-tag" });
   }
 
+  validateSource(opts.expectedSource);
+  const image = registryImage(opts.image);
   const commit = await resolveCommit(opts, deps.git);
   await readTaggedDenoJson(deps.git, commit, opts.version);
   const token: { value?: string } = {};
-  await waitForBothSurfaces(opts, deps, token);
+  await waitForBothSurfaces(opts, deps, image, token);
 
   const manifest = await loadJsrManifest(deps.fetch, opts.version, false);
   if (!manifest) {
@@ -230,12 +260,14 @@ export async function verifyPublished(
   }
   await assertJsrMatchesTag(manifest, deps.git, commit, opts.version);
 
-  const index = await fetchOciIndex(deps, opts.version, token);
+  const index = await fetchOciIndex(deps, image, opts.version, token);
   const platforms = await readPlatformConfigs(
     deps,
+    image,
     index.body,
     commit,
     opts.version,
+    opts.expectedSource,
     token,
   );
   return {
@@ -245,7 +277,12 @@ export async function verifyPublished(
     gitTag: opts.gitTag,
     commit,
     jsr: { version: opts.version, checkedFiles: ["/README.md", "/deno.json"] },
-    ghcr: { tag: opts.version, indexDigest: index.digest, platforms },
+    ghcr: {
+      image: opts.image,
+      tag: opts.version,
+      indexDigest: index.digest,
+      platforms,
+    },
   };
 }
 
@@ -322,6 +359,39 @@ function readInt(flag: string, value: string | undefined, min: number): number {
   return parsed;
 }
 
+interface RegistryImage {
+  name: string;
+  tokenUrl: string;
+  manifests: string;
+  blobs: string;
+}
+
+function validateSource(source: string): void {
+  if (
+    !/^https:\/\/github\.com\/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\/mcp-spice$/.test(source)
+  ) {
+    throw invalidCli("expected-source must be the release GitHub repository URL", {
+      source,
+    });
+  }
+}
+
+function registryImage(name: string): RegistryImage {
+  if (!/^ghcr\.io\/[a-z0-9]+(?:-[a-z0-9]+)*\/mcp-spice$/.test(name)) {
+    throw invalidCli("image must be a bare ghcr.io/<owner>/mcp-spice reference", {
+      image: name,
+    });
+  }
+  const repository = name.slice(`${GHCR}/`.length);
+  return {
+    name,
+    tokenUrl:
+      `https://${GHCR}/token?service=${GHCR}&scope=repository:${repository}:pull`,
+    manifests: `https://${GHCR}/v2/${repository}/manifests`,
+    blobs: `https://${GHCR}/v2/${repository}/blobs`,
+  };
+}
+
 async function resolveCommit(opts: CliOptions, git: GitSource): Promise<string> {
   const commit = (await git.resolveTagCommit(opts.gitTag)).toLowerCase();
   if (!COMMIT_PATTERN.test(commit)) {
@@ -381,12 +451,13 @@ async function readTaggedDenoJson(
 async function waitForBothSurfaces(
   opts: CliOptions,
   deps: VerifyDeps,
+  image: RegistryImage,
   token: { value?: string },
 ): Promise<void> {
   const deadline = deps.now() + opts.waitTimeoutMs;
   for (;;) {
     const jsr = await loadJsrManifest(deps.fetch, opts.version, true);
-    const oci = await probeOci(deps, opts.version, token);
+    const oci = await probeOci(deps, image, opts.version, token);
     if (jsr && oci) return;
     if (deps.now() >= deadline) {
       if (!jsr) {
@@ -398,7 +469,7 @@ async function waitForBothSurfaces(
       }
       fail(
         "oci_unavailable",
-        { image: PUBLISHED_IMAGE, tag: opts.version },
+        { image: image.name, tag: opts.version },
         "Wait until the GHCR tag exists, then re-run the verifier.",
       );
     }
@@ -456,13 +527,14 @@ async function loadJsrManifest(
 
 async function probeOci(
   deps: VerifyDeps,
+  image: RegistryImage,
   tag: string,
   token: { value?: string },
 ): Promise<boolean> {
-  const bearer = await ghcrToken(deps, token, true);
+  const bearer = await ghcrToken(deps, image, token, true);
   if (!bearer) return false;
   const result = readyOrRetry(
-    await timedGet(deps.fetch, `${MANIFESTS}/${tag}`, {
+    await timedGet(deps.fetch, `${image.manifests}/${tag}`, {
       Accept: INDEX_TYPES.join(", "),
       Authorization: `Bearer ${bearer}`,
     }),
@@ -471,7 +543,7 @@ async function probeOci(
   if (result.status !== 200) {
     fail(
       "oci_unavailable",
-      { image: PUBLISHED_IMAGE, tag, status: result.status },
+      { image: image.name, tag, status: result.status },
       "Anonymous public GHCR access is required.",
     );
   }
@@ -565,16 +637,17 @@ function gitPathFromJsr(jsrPath: string): string {
 
 async function fetchOciIndex(
   deps: VerifyDeps,
+  image: RegistryImage,
   tag: string,
   token: { value?: string },
 ): Promise<{ digest: string; body: OciIndex }> {
-  const bearer = await ghcrToken(deps, token, false);
+  const bearer = await ghcrToken(deps, image, token, false);
   const result = await requireOk(
     deps.fetch,
-    `${MANIFESTS}/${tag}`,
+    `${image.manifests}/${tag}`,
     { Accept: INDEX_TYPES.join(", "), Authorization: `Bearer ${bearer}` },
     "oci_unavailable",
-    { image: PUBLISHED_IMAGE, tag },
+    { image: image.name, tag },
   );
   const digest = await assertDigest(result, INDEX_TYPES);
   const body = parseObject(result.bytes, "oci_unavailable", { ref: tag });
@@ -597,12 +670,14 @@ async function fetchOciIndex(
 
 async function readPlatformConfigs(
   deps: VerifyDeps,
+  image: RegistryImage,
   index: OciIndex,
   commit: string,
   version: string,
+  expectedSource: string,
   token: { value?: string },
 ): Promise<PublishedPlatform[]> {
-  const bearer = await ghcrToken(deps, token, false);
+  const bearer = await ghcrToken(deps, image, token, false);
   const found = new Map<string, PublishedPlatform>();
   for (const entry of index.manifests) {
     const platform = entry.platform;
@@ -629,7 +704,7 @@ async function readPlatformConfigs(
         "Each platform descriptor must include a digest.",
       );
     }
-    const manifest = await fetchManifest(deps, entry.digest, bearer);
+    const manifest = await fetchManifest(deps, image, entry.digest, bearer);
     const configDigest = manifest.config?.digest;
     if (typeof configDigest !== "string") {
       fail(
@@ -638,7 +713,7 @@ async function readPlatformConfigs(
         "Each platform manifest must include a config digest.",
       );
     }
-    const config = await fetchConfig(deps, configDigest, bearer);
+    const config = await fetchConfig(deps, image, configDigest, bearer);
     if (config.os !== platform.os || config.architecture !== platform.architecture) {
       fail(
         "oci_platform_mismatch",
@@ -655,7 +730,7 @@ async function readPlatformConfigs(
       architecture: platform.architecture,
       manifestDigest: manifest.digest,
       configDigest,
-      labels: readLabels(config, key, commit, version),
+      labels: readLabels(config, key, commit, version, expectedSource),
     });
   }
   return REQUIRED_PLATFORMS.map((name) => {
@@ -676,6 +751,7 @@ function readLabels(
   platform: string,
   commit: string,
   version: string,
+  expectedSource: string,
 ): PublishedPlatform["labels"] {
   const nested = config.config;
   const labels = nested !== null && typeof nested === "object"
@@ -696,7 +772,7 @@ function readLabels(
     typeof source !== "string" ||
     typeof revision !== "string" ||
     typeof imageVersion !== "string" ||
-    source !== PUBLISHED_SOURCE ||
+    source !== expectedSource ||
     revision !== commit ||
     imageVersion !== version
   ) {
@@ -705,7 +781,7 @@ function readLabels(
       {
         platform,
         expected: {
-          "org.opencontainers.image.source": PUBLISHED_SOURCE,
+          "org.opencontainers.image.source": expectedSource,
           "org.opencontainers.image.revision": commit,
           "org.opencontainers.image.version": version,
         },
@@ -727,12 +803,13 @@ function readLabels(
 
 async function fetchManifest(
   deps: VerifyDeps,
+  image: RegistryImage,
   digest: string,
   bearer: string,
 ): Promise<{ digest: string; config?: { digest?: string } }> {
   const result = await requireOk(
     deps.fetch,
-    `${MANIFESTS}/${digest}`,
+    `${image.manifests}/${digest}`,
     { Accept: MANIFEST_TYPES.join(", "), Authorization: `Bearer ${bearer}` },
     "oci_unavailable",
     { digest },
@@ -744,12 +821,13 @@ async function fetchManifest(
 
 async function fetchConfig(
   deps: VerifyDeps,
+  image: RegistryImage,
   digest: string,
   bearer: string,
 ): Promise<Record<string, unknown>> {
   const result = await requireOk(
     deps.fetch,
-    `${BLOBS}/${digest}`,
+    `${image.blobs}/${digest}`,
     {
       Accept: "application/vnd.oci.image.config.v1+json, application/octet-stream",
       Authorization: `Bearer ${bearer}`,
@@ -816,21 +894,24 @@ function normalizeDigest(value: string): string | null {
 
 async function ghcrToken(
   deps: VerifyDeps,
+  image: RegistryImage,
   cache: { value?: string },
   optional: true,
 ): Promise<string | null>;
 async function ghcrToken(
   deps: VerifyDeps,
+  image: RegistryImage,
   cache: { value?: string },
   optional: false,
 ): Promise<string>;
 async function ghcrToken(
   deps: VerifyDeps,
+  image: RegistryImage,
   cache: { value?: string },
   optional: boolean,
 ): Promise<string | null> {
   if (cache.value) return cache.value;
-  const raw = await timedGet(deps.fetch, TOKEN_URL, {
+  const raw = await timedGet(deps.fetch, image.tokenUrl, {
     Accept: "application/json",
   });
   const result = readyOrRetry(raw);
@@ -838,25 +919,25 @@ async function ghcrToken(
     if (optional) return null;
     fail(
       "oci_unavailable",
-      { url: TOKEN_URL, reason: raw === "timeout" ? "timeout" : raw.status },
+      { url: image.tokenUrl, reason: raw === "timeout" ? "timeout" : raw.status },
       "Anonymous public GHCR token exchange must succeed.",
     );
   }
   if (result.status !== 200) {
     fail(
       "oci_unavailable",
-      { url: TOKEN_URL, status: result.status },
+      { url: image.tokenUrl, status: result.status },
       "Anonymous public GHCR token exchange must succeed.",
     );
   }
-  const body = parseObject(result.bytes, "oci_unavailable", { url: TOKEN_URL });
+  const body = parseObject(result.bytes, "oci_unavailable", { url: image.tokenUrl });
   const value = [body.token, body.access_token].find((item) =>
     typeof item === "string" && item.length > 0
   );
   if (typeof value !== "string") {
     fail(
       "oci_unavailable",
-      { url: TOKEN_URL, reason: "token missing" },
+      { url: image.tokenUrl, reason: "token missing" },
       "Anonymous public GHCR token exchange must return a token.",
     );
   }

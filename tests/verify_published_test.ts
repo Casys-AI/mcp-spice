@@ -16,6 +16,8 @@ const ROOT = fromFileUrl(new URL("../", import.meta.url));
 const TAG = "v9.9.9";
 const VERSION = "9.9.9";
 const COMMIT = "aa".repeat(20);
+const PERSONAL_SOURCE = "https://github.com/superWorldSavior/mcp-spice";
+const PERSONAL_IMAGE = "ghcr.io/superworldsavior/mcp-spice";
 const README = "# mcp-spice\n";
 const MOD = 'import "@std/path";\n';
 const DENO_JSON = JSON.stringify(
@@ -42,7 +44,14 @@ Deno.test("parseArgs rejects unknown flags, positionals, and malformed values", 
   assertEquals(parseArgsFailure(["--git-tag", "v1"]).code, "invalid_cli");
   assertEquals(parseArgsFailure(["--git-tag", "latest"]).code, "invalid_cli");
   assertEquals(
-    parseArgsFailure(["--git-tag", TAG, "--image", PUBLISHED_IMAGE]).code,
+    parseArgsFailure([
+      "--git-tag",
+      TAG,
+      "--expected-source",
+      PUBLISHED_SOURCE,
+      "--image",
+      "https://ghcr.io/casys-ai/mcp-spice",
+    ]).code,
     "invalid_cli",
   );
   assertEquals(
@@ -74,12 +83,56 @@ Deno.test("parseArgs rejects unknown flags, positionals, and malformed values", 
   );
 });
 
+Deno.test("parseArgs requires trusted source context and a bare GHCR image", () => {
+  assertStringIncludes(
+    String(parseArgsFailure(["--git-tag", TAG]).context.reason),
+    "expected-source",
+  );
+  for (
+    const source of [
+      "http://github.com/superWorldSavior/mcp-spice",
+      "https://github.com/superWorldSavior/other",
+      "https://github.com/superWorldSavior/mcp-spice?ref=main",
+      "https://github.com/superWorldSavior/mcp-spice#main",
+      "https://github.com@evil.example/superWorldSavior/mcp-spice",
+    ]
+  ) {
+    assertEquals(
+      parseArgsFailure(["--git-tag", TAG, "--expected-source", source]).code,
+      "invalid_cli",
+    );
+  }
+  for (
+    const image of [
+      `${PERSONAL_IMAGE}:latest`,
+      `${PERSONAL_IMAGE}@sha256:${"aa".repeat(32)}`,
+      "ghcr.io/superworldsavior/other",
+      "ghcr.io/superworldsavior/../mcp-spice",
+      "other.example/superworldsavior/mcp-spice",
+    ]
+  ) {
+    assertEquals(
+      parseArgsFailure([
+        "--git-tag",
+        TAG,
+        "--expected-source",
+        PERSONAL_SOURCE,
+        "--image",
+        image,
+      ]).code,
+      "invalid_cli",
+    );
+  }
+});
+
 Deno.test("parseArgs accepts a verified tag and numeric wait bounds", () => {
   const opts = parseArgs([
     "--git-tag",
     TAG,
     "--expected-commit",
     COMMIT,
+    "--expected-source",
+    PUBLISHED_SOURCE,
     "--wait-timeout-ms",
     "0",
     "--wait-interval-ms",
@@ -89,6 +142,8 @@ Deno.test("parseArgs accepts a verified tag and numeric wait bounds", () => {
   assertEquals(opts.gitTag, TAG);
   assertEquals(opts.version, VERSION);
   assertEquals(opts.expectedCommit, COMMIT);
+  assertEquals(opts.expectedSource, PUBLISHED_SOURCE);
+  assertEquals(opts.image, PUBLISHED_IMAGE);
   assertEquals(opts.waitTimeoutMs, 0);
   assertEquals(opts.waitIntervalMs, 5);
 });
@@ -103,7 +158,8 @@ Deno.test("verify:published task help and invalid flags stay offline", async () 
   assertEquals(help.code, 0);
   assertStringIncludes(help.stdout, "--git-tag");
   assertStringIncludes(help.stdout, PUBLISHED_IMAGE);
-  assertEquals(help.stdout.includes("--image"), false);
+  assertEquals(help.stdout.includes("--image"), true);
+  assertStringIncludes(help.stdout, "--expected-source");
   assertEquals(help.stdout.includes("--jsr-origin"), false);
 
   const standalone = await runVerifyTask(["--", "--git-tag", TAG]);
@@ -111,7 +167,14 @@ Deno.test("verify:published task help and invalid flags stay offline", async () 
   assertStringIncludes(standalone.stderr, "invalid_cli");
   assertStringIncludes(standalone.stderr, `"flag": "--"`);
 
-  const unknownImage = await runVerifyTask(["--image", PUBLISHED_IMAGE]);
+  const unknownImage = await runVerifyTask([
+    "--git-tag",
+    TAG,
+    "--expected-source",
+    PUBLISHED_SOURCE,
+    "--image",
+    "https://ghcr.io/casys-ai/mcp-spice",
+  ]);
   assertEquals(unknownImage.code, 2);
   assertStringIncludes(unknownImage.stderr, "invalid_cli");
 
@@ -129,6 +192,12 @@ Deno.test("docker workflow uses the task argument contract and archives JSON evi
   assertEquals(/deno task verify:published\s+--\s/.test(verifyJob), false);
   assertEquals(/GHCR_TOKEN|secrets\.GITHUB_TOKEN/.test(verifyJob), false);
   assertStringIncludes(verifyJob, "git rev-parse --verify HEAD");
+  assertStringIncludes(verifyJob, '--expected-source "$RELEASE_SOURCE"');
+  assertStringIncludes(verifyJob, '--image "$REGISTRY_IMAGE"');
+  assertStringIncludes(
+    verifyJob,
+    "RELEASE_SOURCE: ${{ github.server_url }}/${{ github.repository }}",
+  );
   assertStringIncludes(
     verifyJob,
     '> "${RUNNER_TEMP}/published-evidence.json"',
@@ -146,6 +215,7 @@ Deno.test("verifyPublished records JSR, tag commit, index digest and image label
   assertEquals(evidence.commit, COMMIT);
   assertEquals(evidence.jsr.version, VERSION);
   assertEquals(evidence.jsr.checkedFiles, ["/README.md", "/deno.json"]);
+  assertEquals(evidence.ghcr.image, PUBLISHED_IMAGE);
   assertEquals(evidence.ghcr.tag, VERSION);
   assertEquals(evidence.ghcr.indexDigest, world.indexDigest);
   assertEquals(evidence.ghcr.platforms.length, 2);
@@ -157,6 +227,73 @@ Deno.test("verifyPublished records JSR, tag commit, index digest and image label
   assertEquals(
     evidence.ghcr.platforms.map((p) => `${p.os}/${p.architecture}`).sort(),
     ["linux/amd64", "linux/arm64"],
+  );
+});
+
+Deno.test("verifyPublished qualifies the personal image against explicit current release source", async () => {
+  const world = await successfulWorld({
+    expectedSource: PERSONAL_SOURCE,
+    image: PERSONAL_IMAGE,
+  });
+  const urls: string[] = [];
+  const inner = world.deps.fetch;
+  world.deps.fetch = (input, init) => {
+    urls.push(String(input));
+    return inner(input, init);
+  };
+  const evidence = await verifyPublished(world.opts, world.deps);
+  assertEquals(evidence.ghcr.image, PERSONAL_IMAGE);
+  assertEquals(evidence.ghcr.indexDigest, world.indexDigest);
+  for (const platform of evidence.ghcr.platforms) {
+    assertEquals(platform.labels["org.opencontainers.image.source"], PERSONAL_SOURCE);
+    assertEquals(platform.labels["org.opencontainers.image.revision"], COMMIT);
+    assertEquals(platform.labels["org.opencontainers.image.version"], VERSION);
+  }
+  const ghcrUrls = urls.filter((url) => new URL(url).hostname === "ghcr.io");
+  assertEquals(ghcrUrls.some((url) => url.includes("casys-ai")), false);
+  const tokenUrl = new URL(ghcrUrls.find((url) => new URL(url).pathname === "/token")!);
+  assertEquals(
+    tokenUrl.searchParams.get("scope"),
+    "repository:superworldsavior/mcp-spice:pull",
+  );
+  assertEquals(
+    ghcrUrls.filter((url) => new URL(url).pathname !== "/token").every((url) =>
+      new URL(url).pathname.startsWith("/v2/superworldsavior/mcp-spice/")
+    ),
+    true,
+  );
+});
+
+Deno.test("current source context refuses a historical source label on either platform", async () => {
+  for (const platform of ["amd64", "arm64"]) {
+    const world = await successfulWorld({
+      expectedSource: PERSONAL_SOURCE,
+      image: PERSONAL_IMAGE,
+      ...(platform === "amd64"
+        ? { amd64Source: PUBLISHED_SOURCE }
+        : { arm64Source: PUBLISHED_SOURCE }),
+    });
+    const error = await assertRejects(
+      () => verifyPublished(world.opts, world.deps),
+      VerifyFailure,
+    );
+    assertEquals(error.code, "oci_label_mismatch");
+    assertEquals(error.context.platform, `linux/${platform}`);
+  }
+});
+
+Deno.test("explicit historical source verification retains Casys image access", async () => {
+  const world = await successfulWorld({
+    expectedSource: PUBLISHED_SOURCE,
+    image: PUBLISHED_IMAGE,
+  });
+  const evidence = await verifyPublished(world.opts, world.deps);
+  assertEquals(evidence.ghcr.image, PUBLISHED_IMAGE);
+  assertEquals(
+    evidence.ghcr.platforms.every((platform) =>
+      platform.labels["org.opencontainers.image.source"] === PUBLISHED_SOURCE
+    ),
+    true,
   );
 });
 
@@ -600,6 +737,9 @@ async function platformImage(options: {
 }
 
 async function successfulWorld(options?: {
+  expectedSource?: string;
+  image?: string;
+  arm64Source?: string;
   waitTimeoutMs?: number;
   waitIntervalMs?: number;
   amd64Revision?: string;
@@ -637,12 +777,13 @@ async function successfulWorld(options?: {
     architecture: "amd64",
     configArchitecture: options?.amd64ConfigArchitecture,
     revision: options?.amd64Revision ?? COMMIT,
-    source: options?.amd64Source,
+    source: options?.amd64Source ?? options?.expectedSource,
     version: options?.amd64Version,
   });
   const arm64 = await platformImage({
     architecture: "arm64",
     revision: COMMIT,
+    source: options?.arm64Source ?? options?.expectedSource,
   });
   const manifests = [
     {
@@ -706,12 +847,17 @@ async function successfulWorld(options?: {
     TAG,
     "--expected-commit",
     COMMIT,
+    "--expected-source",
+    options?.expectedSource ?? PUBLISHED_SOURCE,
+    "--image",
+    options?.image ?? PUBLISHED_IMAGE,
     "--wait-timeout-ms",
     String(options?.waitTimeoutMs ?? 0),
     "--wait-interval-ms",
     String(options?.waitIntervalMs ?? 5),
   ]);
 
+  const imageRepository = opts.image.slice("ghcr.io/".length);
   const deps: VerifyDeps = {
     fetch: (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = new URL(String(input));
@@ -730,15 +876,15 @@ async function successfulWorld(options?: {
           jsonResponse(versionMeta, { "content-type": "application/json" }),
         );
       }
-      if (url.pathname === `/v2/casys-ai/mcp-spice/manifests/${VERSION}`) {
+      if (url.pathname === `/v2/${imageRepository}/manifests/${VERSION}`) {
         return Promise.resolve(bytesResponse(indexBytes, {
           "content-type": "application/vnd.oci.image.index.v1+json",
           "docker-content-digest": indexDigest,
         }));
       }
-      const digestMatch = url.pathname.match(
-        /\/v2\/casys-ai\/mcp-spice\/(?:manifests|blobs)\/(sha256:[0-9a-f]+)$/,
-      );
+      const digestMatch = url.pathname.startsWith(`/v2/${imageRepository}/`)
+        ? url.pathname.match(/\/(?:manifests|blobs)\/(sha256:[0-9a-f]+)$/)
+        : null;
       if (digestMatch) {
         const blob = blobs.get(digestMatch[1]);
         if (!blob) {

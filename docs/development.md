@@ -80,11 +80,15 @@ revision/version/platform identities.
 
 A missing surface or a mismatch fails the job. The verifier never marks those cases
 successful. Successful evidence is written to a JSON file and archived as a GitHub
-Actions artifact. Run `scripts/verify_published.ts` against an explicit tag after both
-surfaces are available:
+Actions artifact. The workflow supplies the source URL and image from the reviewed
+release context. For a historical release, pass its original coordinates explicitly, for
+example the existing Casys `v0.6.4` release (with that tag available locally):
 
 ```bash
-deno task verify:published --git-tag v<version> --expected-commit <tag-commit>
+deno task verify:published --git-tag v0.6.4 \
+  --expected-commit "$(git rev-parse --verify 'refs/tags/v0.6.4^{commit}')" \
+  --expected-source https://github.com/Casys-AI/mcp-spice \
+  --image ghcr.io/casys-ai/mcp-spice
 ```
 
 Deployment examples keep the digest-pinned form
